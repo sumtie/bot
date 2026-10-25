@@ -2,7 +2,7 @@ from
 - https://github.com/eishare/Node.js
 
 
-Thanks to eishare
+Thanks eishare
 
 
 ## 1. ✔ 最新xHTTP版Argo+TUIC方案：xHTTP抗封锁升级、H3(UDP)告别晚高峰龟速：
