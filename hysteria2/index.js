@@ -15,8 +15,9 @@ const singBoxPath = path.join(npmDir, 'sing-box');
 const configPath = path.join(npmDir, 'config.json');
 const certPath = path.join(npmDir, 'cert.pem');
 const keyPath = path.join(npmDir, 'key.pem');
+const pwdPath = path.join(npmDir, 'pwd.txt'); // 密码持久化文件路径
 
-// 获取容器分配给你的端口号（默认回退到 3000）
+// 把容器分配给你的端口号替换掉 3000
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 async function getPublicIP() {
@@ -37,7 +38,6 @@ async function getPublicIP() {
     .catch(() => fetchIP("https://ipv4.icanhazip.com"))
     .catch(() => "127.0.0.1");
 }
-
 
 // 下载文件的辅助函数
 async function downloadFile(url, dest) {
@@ -85,8 +85,16 @@ async function main() {
         // 转换为 64 位小写十六进制字符串（v2rayN 和 sing-box 标准要求）
         const pinSHA256 = x509.fingerprint256.replace(/:/g, '').toLowerCase();
 
-        // 4. 随机生成 Hysteria 2 的连接密码
-        const password = crypto.randomBytes(16).toString('hex');
+        // 4. 检查密码文件：首次运行生成并写入，重启复用已有密码
+        let password;
+        if (fs.existsSync(pwdPath)) {
+            password = fs.readFileSync(pwdPath, 'utf8').trim();
+            console.log('[Info] 检测到已存在的密码，已成功复用。');
+        } else {
+            password = crypto.randomBytes(16).toString('hex');
+            fs.writeFileSync(pwdPath, password, 'utf8');
+            console.log('[Info] 首次运行，已生成新密码并写入 .npm/pwd.txt。');
+        }
 
         // 5. 编写 sing-box 配置文件 (v1.11.4 语法标准)
         const config = {
@@ -132,7 +140,7 @@ async function main() {
         console.log(`SNI / 伪装域名: bing.com`);
         console.log(`证书指纹 (pinSHA256): ${pinSHA256}`);
         console.log('\n--- 🔗 适配新版 v2rayN 的分享链接 (请将 <你的域名或IP> 替换为实际地址) ---');
-        console.log(`hysteria2://${password}@${publicIp}:${PORT}?sni=bing.com&insecure=1&pinSHA256=${pinSHA256}#Hy2`);
+        console.log(`hysteria2://${password}@${publicIp}:${PORT}?sni=bing.com&insecure=1&pinSHA256=${pinSHA256}#Bot-Hy2`);
         console.log('=================================================================\n');
 
         // 7. 启动 sing-box 进程
