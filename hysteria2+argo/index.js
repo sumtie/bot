@@ -16,13 +16,28 @@ const cloudflaredPath = path.join(npmDir, 'cloudflared');
 const configPath = path.join(npmDir, 'config.json');
 const certPath = path.join(npmDir, 'cert.pem');
 const keyPath = path.join(npmDir, 'key.pem');
+const pwdPath = path.join(npmDir, 'pwd.txt'); // 密码保存路径
+const uuidPath = path.join(npmDir, 'u.txt');  // UUID 保存路径
 
 // 获取环境变量并确保端口是数字类型
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const ARGO_AUTH = process.env.ARGO_AUTH || '';
 const ARGO_PORT = process.env.ARGO_PORT ? parseInt(process.env.ARGO_PORT, 10) : 0;
 const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
-const UUID = process.env.UUID || crypto.randomUUID();
+
+// UUID 复用逻辑：优先环境变量 -> 其次读取本地文件 -> 最后自动生成并保存
+let UUID;
+if (process.env.UUID) {
+    UUID = process.env.UUID;
+    console.log('[Info] 使用环境变量中的 UUID。');
+} else if (fs.existsSync(uuidPath)) {
+    UUID = fs.readFileSync(uuidPath, 'utf8').trim();
+    console.log('[Info] 检测到已保存的 UUID，已成功复用。');
+} else {
+    UUID = crypto.randomUUID();
+    fs.writeFileSync(uuidPath, UUID, 'utf8');
+    console.log('[Info] 首次运行，已生成新 UUID 并写入 .npm/u.txt。');
+}
 
 async function getPublicIP() {
   const fetchIP = (url) => new Promise((resolve, reject) => {
@@ -117,7 +132,17 @@ async function main() {
         const certContent = fs.readFileSync(certPath);
         const x509 = new X509Certificate(certContent);
         const pinSHA256 = x509.fingerprint256.replace(/:/g, '').toLowerCase();
-        const password = crypto.randomBytes(16).toString('hex');
+
+        // 密码复用逻辑：检查 .npm/pwd.txt 是否存在
+        let password;
+        if (fs.existsSync(pwdPath)) {
+            password = fs.readFileSync(pwdPath, 'utf8').trim();
+            console.log('[Info] 检测到已保存的密码，已成功复用。');
+        } else {
+            password = crypto.randomBytes(16).toString('hex');
+            fs.writeFileSync(pwdPath, password, 'utf8');
+            console.log('[Info] 首次运行，已生成新密码并写入 .npm/pwd.txt。');
+        }
 
         // 4. 编写 sing-box 配置文件 (支持 Hysteria 2 与 VLESS WS 双协议)
         const config = {
@@ -183,7 +208,7 @@ async function main() {
         console.log(`SNI / 伪装域名: bing.com`);
         console.log(`证书指纹 (pinSHA256): ${pinSHA256}`);
         console.log('\n--- 🔗 适配新版 v2rayN 的分享链接 ---');
-        console.log(`hysteria2://${password}@${publicIp}:${PORT}?sni=bing.com&insecure=1&pinSHA256=${pinSHA256}#Hy2`);
+        console.log(`hysteria2://${password}@${publicIp}:${PORT}?sni=bing.com&insecure=1&pinSHA256=${pinSHA256}#BotHosting-Hy2`);
         console.log('=================================================================\n');
 
         // 6. 启动 sing-box 进程
