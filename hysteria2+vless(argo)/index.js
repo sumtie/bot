@@ -208,7 +208,7 @@ async function main() {
         console.log(`SNI / 伪装域名: bing.com`);
         console.log(`证书指纹 (pinSHA256): ${pinSHA256}`);
         console.log('\n--- 🔗 适配新版 v2rayN 的分享链接 ---');
-        console.log(`hysteria2://${password}@${publicIp}:${PORT}?sni=bing.com&insecure=1&pinSHA256=${pinSHA256}#BotHosting-Hy2`);
+        console.log(`hysteria2://${password}@${publicIp}:${PORT}?sni=bing.com&pinSHA256=${pinSHA256}#BotHosting-Hy2`);
         console.log('=================================================================\n');
 
         // 6. 启动 sing-box 进程
