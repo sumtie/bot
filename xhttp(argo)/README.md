@@ -125,7 +125,7 @@ main().catch(e => { console.error(e); process.exit(1); });
 
 - 环境变量 `ARGO_TOKEN` 必填（Zero Trust 里已建好的隧道 token）；`ARGO_PORT` 默认 8080；`ARGO_DOMAIN` 可选，填了就直接打印完整可用链接。
 - Cloudflare 后台该隧道的 Public Hostname 必须指向 `http://localhost:8080`（或你改的端口），Service 类型选 HTTP。
-- 启动命令 `npm start`，主机需允许写入 `~/.npm` 与外网访问 GitHub。
+- 启动命令 `npm start`，主机需允许写入 `.npm` 与外网访问 GitHub。
 - 客户端：XHTTP + TLS，`mode=auto`、`path=/`、`sni`/`host` 均为你的域名，SNI 与 Host 必须一致否则 403。
 
 注意事项：`127.0.0.1` 绑定意味着容器外无法直连 8080，全部流量只走隧道，安全但也要求 Cloudflare 侧配置正确；如果主机用 IPv6-only 或 docker 网络特殊，把监听改成 `0.0.0.0` 即可。
