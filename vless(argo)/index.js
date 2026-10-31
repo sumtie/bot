@@ -50,7 +50,7 @@ async function setup() {
 
 function writeConfig() {
   fs.writeFileSync(CFG, JSON.stringify({
-    log: { level: 'info', timestamp: true },
+    log: { level: 'warn', timestamp: true },
     inbounds: [{
       type: 'vless',
       tag: 'vless-ws',
