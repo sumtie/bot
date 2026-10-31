@@ -4,7 +4,6 @@
 
 下面是完整实现，单文件，逻辑尽量精简。核心点：二进制和配置全部落在 `./.npm` 下，UUID 写入文件复用，`ARGO_TOKEN` 存在则走固定隧道，否则起临时隧道并从输出里抓取 `*.trycloudflare.com` 域名。
 
-Copy code
 
 ```js
 // index.js  ——  node index.js
