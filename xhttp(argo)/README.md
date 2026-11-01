@@ -7,7 +7,7 @@
 **package.json**
 
 
-```
+```json
 {
   "name": "argo-xhttp",
   "version": "1.0.0",
@@ -19,7 +19,7 @@
 **index.js**
 
 
-```
+```js
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
