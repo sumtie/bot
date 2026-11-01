@@ -1,4 +1,3 @@
-// index.js
 const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -36,12 +35,14 @@ async function dl(url, dest) {
 
 async function setup() {
   if (!fs.existsSync(SB)) {
+    console.log('[*] 拉取 sing-box ');
     const tgz = path.join(DIR, 'sb.tgz');
     await dl(`https://github.com/SagerNet/sing-box/releases/download/v1.11.4/sing-box-1.11.4-linux-${ARCH}.tar.gz`, tgz);
     execSync(`tar -xzf "${tgz}" -C "${DIR}" --strip-components=1`, { stdio: 'inherit' });
     fs.rmSync(tgz, { force: true });
   }
   if (!fs.existsSync(CF)) {
+    console.log('[*] 拉取 cloudflared ');
     await dl(`https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}`, CF);
   }
   fs.chmodSync(SB, 0o755);
