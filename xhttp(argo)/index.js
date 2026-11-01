@@ -5,7 +5,7 @@ const https = require('https');
 const zlib = require('zlib');
 const crypto = require('crypto');
 
-const XRAY_VER = 'v26.10.29';
+const XRAY_VER = 'v26.10.31';
 const ARM = process.arch === 'arm64';
 const DIR = path.join(process.cwd(), '.npm');
 const PORT = Number(process.env.ARGO_PORT || 8080);
