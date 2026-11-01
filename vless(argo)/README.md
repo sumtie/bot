@@ -5,7 +5,7 @@
 下面是一份精简实现。核心思路：所有二进制和配置都放在 `.npm` 目录，UUID 保存到文件中以便复用，sing-box 用 VLESS+WS 监听 `ARGO_PORT`（默认 8080），cloudflared 根据有没有 `ARGO_TOKEN` 决定是启动固定隧道还是临时隧道，最后自动输出节点链接。
 
 
-```
+```js
 const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
