@@ -1,4 +1,4 @@
-编写nodejs代码，部署在nodejs类主机上，xray v26.10.29+cloudflare隧道，搭建vless+xhttp搭配cloudflare隧道节点，默认端口号ARGO_PORT为8080，必须填写ARGO_TOKEN，启动固定隧道，ARGO_DOMAIN可填可不填写。代码执行过程所有文件放到.npm目录下，.npm与index.js在同一级目录，uuid重启可复用，尽量简约代码少代码实现。
+编写nodejs代码，部署在nodejs类主机上，xray v26.10.31+cloudflare隧道，搭建vless+xhttp搭配cloudflare隧道节点，默认端口号ARGO_PORT为8080，必须填写ARGO_TOKEN，启动固定隧道，ARGO_DOMAIN可填可不填写。代码执行过程所有文件放到.npm目录下，.npm与index.js在同一级目录，uuid重启可复用，尽量简约代码少代码实现。
 
 已运行 16s · 1 步
 
