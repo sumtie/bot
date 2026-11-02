@@ -4,4 +4,6 @@ reference:
 
 Thank eishare and eooce
 
+js obfuscator: https://jshaman.com/
+
 find something: https://freehosts.eu/hosts
