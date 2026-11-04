@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 
-const BASE = path.join(process.cwd(), '.npm');
+const DIR = path.join(process.cwd(), '.npm');
 
 const PORT = parseInt(process.env.ARGO_PORT || '8080', 10);
 const TOKEN = (process.env.ARGO_TOKEN || '').trim();
@@ -13,21 +13,14 @@ const DOMAIN = (process.env.ARGO_DOMAIN || '').trim();
 
 const WS_PATH = '/argo';
 const ARCH = process.arch === 'arm64' ? 'arm64' : 'amd64';
-const SB = path.join(BASE, 'sing-box');
-const CF = path.join(BASE, 'cloudflared');
-const CFG = path.join(BASE, 'config.json');
-const UUID_F = path.join(BASE, 'uuid.txt');
+const SB = path.join(DIR, 'sing-box');
+const CF = path.join(DIR, 'cloudflared');
+const CFG = path.join(DIR, 'config.json');
+const UUID_FILE = path.join(DIR, 'uuid.txt');
 
+let uuid = fs.existsSync(UUID_FILE) ? fs.readFileSync(UUID_FILE, 'utf8').trim() : '';
+if (!uuid) { uuid = crypto.randomUUID(); fs.writeFileSync(UUID_FILE, uuid); }
 
-function uuid() {
-  if (fs.existsSync(UUID_F)) {
-    const v = fs.readFileSync(UUID_F, 'utf8').trim();
-    if (v) return v;
-  }
-  const v = crypto.randomUUID();
-  fs.writeFileSync(UUID_F, v);
-  return v;
-}
 
 async function dl(url, dest) {
   const r = await fetch(url, { redirect: 'follow' });
@@ -38,9 +31,9 @@ async function dl(url, dest) {
 async function prepare() {
   if (!fs.existsSync(SB)) {
     console.log('[*] 拉取 sing-box ');
-    const tgz = path.join(BASE, 'sb.tgz');
+    const tgz = path.join(DIR, 'sb.tgz');
     await dl(`https://github.com/SagerNet/sing-box/releases/download/v1.11.4/sing-box-1.11.4-linux-${ARCH}.tar.gz`, tgz);
-    execSync(`tar -xzf "${tgz}" -C "${BASE}" --strip-components=1`);
+    execSync(`tar -xzf "${tgz}" -C "${DIR}" --strip-components=1`);
     fs.rmSync(tgz, { force: true });
     fs.chmodSync(SB, 0o755);
   }
@@ -116,11 +109,10 @@ function startTunnel(id) {
 
 (async () => {
   await prepare();
-  const id = uuid();
-  writeConfig(id);
+  writeConfig(uuid);
   startSingBox();
   await new Promise(r => setTimeout(r, 1500));
-  startTunnel(id);
+  startTunnel(uuid);
 })();
 
 ['SIGINT', 'SIGTERM'].forEach(s => process.on(s, () => {
