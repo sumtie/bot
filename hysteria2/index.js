@@ -1,6 +1,3 @@
-// index.js — sing-box 1.11.4 + Hysteria2 极简部署
-// 环境变量：HY_PORT(必填) / PASSWORD(可选) / SNI(可选, 默认 www.bing.com)
-// 所有生成与下载的文件统一放在同目录下的 .npm/ 里
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
