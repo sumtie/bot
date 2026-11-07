@@ -9,11 +9,14 @@ app.py — VLESS + WebSocket over Cloudflare Tunnel (Argo) + 可选 Hysteria2
     .cache/
         bin/cloudflared
         singbox/<ver>-<variant>/...   sing-box 完整解压目录（含依赖 .so）
-        cert/cert.pem  cert/key.pem   自签证书（仅 Hysteria2）
+        cert/cert.pem  cert/key.pem  cert/host.txt   自签证书（仅 Hysteria2）
         config.json
         uuid.txt / path.txt / variant.txt
         node.txt
         logs/app.log
+
+依赖：
+    pip install cryptography requests
 
 环境变量：
     ARGO_PORT     本地 WS 监听端口，默认 8080
@@ -21,6 +24,7 @@ app.py — VLESS + WebSocket over Cloudflare Tunnel (Argo) + 可选 Hysteria2
     ARGO_DOMAIN   固定隧道的域名（可选）
     HY2_PORT      Hysteria2 UDP 端口，默认 0（0 或未填则不启用）
     HY2_HOST      Hysteria2 对外地址，留空自动探测公网 IP
+    HY2_SNI       Hysteria2 的 SNI 与证书 CN/SAN，默认 bing.com
     UUID          强制指定 UUID（可选，同时作为 Hysteria2 密码）
     WS_PATH       强制指定 WS 路径（可选）
     SING_BOX_VER  sing-box 版本，默认 1.14.4
@@ -39,7 +43,6 @@ import re
 import shutil
 import signal
 import socket
-import ssl
 import string
 import subprocess
 import sys
@@ -76,6 +79,7 @@ NODE_FILE = CACHE_DIR / "node.txt"
 VARIANT_FILE = CACHE_DIR / "variant.txt"
 CERT_FILE = CERT_DIR / "cert.pem"
 KEY_FILE = CERT_DIR / "key.pem"
+CERT_HOST_FILE = CERT_DIR / "host.txt"
 
 
 def _env_int(name, default):
@@ -106,6 +110,7 @@ ARGO_TOKEN = (os.environ.get("ARGO_TOKEN") or "").strip()
 ARGO_DOMAIN = (os.environ.get("ARGO_DOMAIN") or "").strip()
 HY2_PORT = _env_port0("HY2_PORT")
 HY2_HOST_ENV = (os.environ.get("HY2_HOST") or "").strip()
+HY2_SNI = (os.environ.get("HY2_SNI") or "bing.com").strip() or "bing.com"
 
 UA = {
     "User-Agent": (
@@ -118,7 +123,7 @@ STOP = threading.Event()
 _LOG_LOCK = threading.Lock()
 _PROCS = {}
 _STATE = {"domain": "", "port": ARGO_PORT, "rt": None, "cf": None,
-          "links": "", "hy2_on": False, "hy2_host": "", "pin": ""}
+          "links": "", "hy2_on": False, "hy2_host": "", "sni": "", "pin": "", "fp": ""}
 
 
 # --------------------------------------------------------------------------- #
@@ -517,21 +522,30 @@ def udp_port_free(port):
 
 
 # --------------------------------------------------------------------------- #
-# 自签证书 / pinSHA256
+# 自签证书 / 指纹（纯 Python，无 openssl 命令行）
 # --------------------------------------------------------------------------- #
-def make_cert_with_cryptography(host):
+def make_cert(sni, extra_host=None):
+    """用 cryptography 生成 ECDSA P-256 自签证书，CN/SAN 固定为 sni（默认 bing.com）。"""
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.x509.oid import NameOID
 
     key = ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)])
-    try:
-        ipaddress.ip_address(host)
-        san = x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(host))])
-    except ValueError:
-        san = x509.SubjectAlternativeName([x509.DNSName(host)])
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, sni)])
+
+    seen = set()
+    entries = []
+    for host in (sni, extra_host):
+        if not host or host in seen:
+            continue
+        seen.add(host)
+        try:
+            entries.append(x509.IPAddress(ipaddress.ip_address(host)))
+        except ValueError:
+            entries.append(x509.DNSName(host))
+    san = x509.SubjectAlternativeName(entries)
+
     now = datetime.datetime.now(datetime.timezone.utc)
     cert = (
         x509.CertificateBuilder()
@@ -552,48 +566,64 @@ def make_cert_with_cryptography(host):
     ))
     CERT_FILE.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
 
-
-def make_cert_with_openssl(host):
-    subprocess.run(["openssl", "ecparam", "-genkey", "-name", "prime256v1",
-                    "-out", str(KEY_FILE)], check=True, capture_output=True, timeout=60)
-    subj = f"/CN={host}"
-    san = f"IP:{host}" if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", host) else f"DNS:{host}"
-    subprocess.run(["openssl", "req", "-new", "-x509", "-days", "3650",
-                    "-key", str(KEY_FILE), "-out", str(CERT_FILE),
-                    "-subj", subj, "-addext", f"subjectAltName={san}"],
-                   check=True, capture_output=True, timeout=60)
+    # 回读校验，确保 PEM 可解析
+    x509.load_pem_x509_certificate(CERT_FILE.read_bytes())
 
 
-def ensure_cert(host):
+def _fingerprints(der):
+    """返回 (冒号分隔大写十六进制, 标准 base64)。"""
+    digest = hashlib.sha256(der).digest()
+    hex_fp = ":".join(f"{b:02X}" for b in digest)
+    b64 = base64.b64encode(digest).decode("ascii")
+    return hex_fp, b64
+
+
+def cert_fingerprints():
+    """证书 DER 的 SHA-256：冒号十六进制用于展示，base64 用于 pinSHA256。"""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+
+    cert = x509.load_pem_x509_certificate(CERT_FILE.read_bytes())
+    return _fingerprints(cert.public_bytes(serialization.Encoding.DER))
+
+
+def ensure_cert(sni, extra_host=None):
+    try:
+        import cryptography  # noqa: F401
+    except Exception:
+        log("缺少 cryptography，请先执行: pip install cryptography")
+        return False
+
     if CERT_FILE.exists() and KEY_FILE.exists():
+        cached_host = ""
         try:
-            KEY_FILE.chmod(0o600)
+            cached_host = CERT_HOST_FILE.read_text(encoding="utf-8").strip()
         except Exception:
             pass
-        return True
+        if cached_host == sni:
+            try:
+                KEY_FILE.chmod(0o600)
+            except Exception:
+                pass
+            return True
+        log(f"证书 SNI 已变化 ({cached_host or '未知'} -> {sni})，重新签发")
+
     try:
-        make_cert_with_cryptography(host)
-        log("自签证书已生成 (cryptography)")
+        make_cert(sni, extra_host)
     except Exception as exc:
-        log(f"cryptography 生成证书失败: {exc}，尝试 openssl")
-        try:
-            make_cert_with_openssl(host)
-            log("自签证书已生成 (openssl)")
-        except Exception as exc2:
-            log(f"openssl 生成证书失败: {exc2}")
-            return False
+        log(f"生成自签证书失败: {exc}")
+        return False
+
     try:
         KEY_FILE.chmod(0o600)
     except Exception:
         pass
+    try:
+        CERT_HOST_FILE.write_text(sni + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    log(f"自签证书已生成 (ECDSA P-256, CN/SAN={sni})")
     return True
-
-
-def cert_pin_sha256():
-    """证书 DER 的 SHA-256，标准 base64（与 Hysteria2 URI 的 pinSHA256 一致）。"""
-    pem = CERT_FILE.read_text(encoding="ascii")
-    der = ssl.PEM_cert_to_DER_cert(pem)
-    return base64.b64encode(hashlib.sha256(der).digest()).decode("ascii")
 
 
 def detect_public_ip():
@@ -647,6 +677,7 @@ def write_config(port, user_uuid, ws_path):
             "tls": {
                 "enabled": True,
                 "alpn": ["h3"],
+                "server_name": _STATE["sni"],
                 "certificate_path": str(CERT_FILE),
                 "key_path": str(KEY_FILE),
             },
@@ -687,7 +718,7 @@ def publish(host):
 
     if _STATE["hy2_on"]:
         hy2_host = _STATE["hy2_host"]
-        sni = hy2_host
+        sni = _STATE["sni"]
         lines.append(build_hy2_link(user_uuid, hy2_host, HY2_PORT, _STATE["pin"], sni))
 
     blob = "\n".join(lines)
@@ -708,8 +739,9 @@ def publish(host):
     log(f"    {lines[0]}")
     if _STATE["hy2_on"]:
         log("")
-        log(f"  [Hysteria2]  端口 {HY2_PORT} (UDP)")
-        log(f"    pinSHA256 : {_STATE['pin']}")
+        log(f"  [Hysteria2]  端口 {HY2_PORT} (UDP)  SNI {_STATE['sni']}")
+        log(f"    SHA-256 指纹 : {_STATE['fp']}")
+        log(f"    pinSHA256    : {_STATE['pin']}")
         log(f"    {lines[1]}")
     log("")
     log(f"  全部链接已保存: {NODE_FILE}")
@@ -820,14 +852,17 @@ def setup_hysteria2():
     if host != HY2_HOST_ENV and not HY2_HOST_ENV:
         log(f"自动探测到对外地址: {host}（可用 HY2_HOST 覆盖）")
 
-    if not ensure_cert(host):
+    if not ensure_cert(HY2_SNI, host):
         log("证书生成失败，Hysteria2 暂不启用")
         return
 
+    pin, fp = cert_fingerprints()
     _STATE["hy2_host"] = host
-    _STATE["pin"] = cert_pin_sha256()
+    _STATE["sni"] = HY2_SNI
+    _STATE["pin"] = pin
+    _STATE["fp"] = fp
     _STATE["hy2_on"] = True
-    log(f"Hysteria2 已启用，pinSHA256={_STATE['pin']}")
+    log(f"Hysteria2 已启用，SNI={HY2_SNI}，SHA-256 指纹: {fp}")
 
 
 # --------------------------------------------------------------------------- #
