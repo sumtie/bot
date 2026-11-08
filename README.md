@@ -4,6 +4,8 @@ reference:
 
 Thank eishare and eooce
 
-js obfuscator: https://jshaman.com/
+js obfuscator: https://obfuscator.io/legacy-playground
+
+混淆选项选择 **Medium**
 
 find something: https://freehosts.eu/hosts
