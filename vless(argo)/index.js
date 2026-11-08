@@ -17,13 +17,14 @@ const ARCH = os.arch() === 'arm64' ? 'arm64' : 'amd64';
 // HY2_PORT 把 0 改成容器/平台开放的公网端口，就可以启用hysteria2节点了。
 const HY2_PORT = Number((process.env.HY2_PORT || '0').trim());
 const HY2_ON = Number.isInteger(HY2_PORT) && HY2_PORT > 0 && HY2_PORT < 65536;
-const HY2_HOST = (process.env.HY2_HOST || '').trim();
+const HY2_HOST = (process.env.HY2_HOST || 'yourServerHost.com').trim();
 const HY2_SNI = 'bing.com';
 
 const SB = path.join(DIR, 'sing-box');
 const CF = path.join(DIR, 'cloudflared');
 const CFG = path.join(DIR, 'config.json');
 const UUID_FILE = path.join(DIR, 'uuid');
+const SUB_FILE = path.join(DIR, 'sub.txt');
 const CERT_FILE = path.join(DIR, 'hy2.crt');
 const KEY_FILE = path.join(DIR, 'hy2.key');
 const FP_FILE = path.join(DIR, 'hy2.fp');
@@ -152,7 +153,7 @@ function writeConfig() {
   const inbounds = [{
     type: 'vless',
     tag: 'vless-ws',
-    listen: '0.0.0.0',
+    listen: '::',
     listen_port: Number(PORT),
     users: [{ uuid }],
     transport: { type: 'ws', path: WSPATH }
@@ -162,7 +163,7 @@ function writeConfig() {
     inbounds.push({
       type: 'hysteria2',
       tag: 'hy2',
-      listen: '0.0.0.0',
+      listen: '::',
       listen_port: HY2_PORT,
       users: [{ password: uuid }],
       tls: {
@@ -194,13 +195,6 @@ function hy2Link(host, fp) {
   return `hysteria2://${uuid}@${h}:${HY2_PORT}?sni=${HY2_SNI}&insecure=1&pinSHA256=${fp}#hy2`;
 }
 
-// function printNodes(host, fp) {
-//   console.log('\n=== 节点 ===\n' + link(host) + '\n');
-//   if (!HY2_ON) return;
-//   console.log(hy2Link(host, fp) + '\n');
-//   console.log(`证书指纹: ${fp}`);
-//   if (!HY2_HOST) console.log('提示: Hysteria2 走 UDP 直连，Cloudflare 域名不通 UDP，请设置 HY2_HOST 为公网 IP 或直连域名后重新生成链接。\n');
-// }
 function printNodes(host, fp) {
   const C = {
     reset: '\x1b[0m',
@@ -220,6 +214,8 @@ function printNodes(host, fp) {
   );
 
   const vless = link(host);
+  const sub = [vless, HY2_ON ? hy2Link(HY2_HOST, fp) : ''].filter(Boolean).join('\n') + '\n';
+  fs.writeFileSync(SUB_FILE, sub);
   const h = host || DOMAIN || '<your-domain>';
 
   console.log('\n');
@@ -245,14 +241,13 @@ function printNodes(host, fp) {
 
   // Hysteria2 节点
   if (HY2_ON) {
-    const hy2 = hy2Link(host, fp);
-    const hy2Host = HY2_HOST || host || DOMAIN || '<your-ip>';
+    const hy2 = hy2Link(HY2_HOST, fp);
 
     console.log(line);
     title('Hysteria2 + TLS');
 
     item('节点名称', 'hy2');
-    item('服务器', hy2Host);
+    item('服务器', HY2_HOST);
     item('端口', HY2_PORT);
     item('协议', 'UDP');
     item('认证密码', uuid);
