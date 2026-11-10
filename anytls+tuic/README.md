@@ -1,1 +1,0 @@
-编写nodejs代码index.js、package.json，https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64-musl.tar.gz 部署在nodejs主机上，部署tuic和anytls协议节点，共用一个端口SERVER_PORT，共用密码(用户填写或自动生成)，openssl无法使用时，selfsigned库自签证书。index.js同目录下创建.npm文件夹，二进制、节点链接等文件统一放进去，简洁代码
