@@ -1,0 +1,12 @@
+{
+  "name": "sb-dual-node",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "selfsigned": "^2.4.1"
+  }
+}
