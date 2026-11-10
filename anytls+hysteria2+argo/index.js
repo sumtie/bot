@@ -1,5 +1,3 @@
-'use strict';
-
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
@@ -8,8 +6,8 @@ const crypto = require('crypto');
 const { spawn, execFileSync } = require('child_process');
 
 const VERSION = '1.14.4';
-const PKG = `sing-box-${VERSION}-linux-amd64-musl`;
-const URL_TGZ = `https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/${PKG}.tar.gz`;
+// const URL_TGZ = `https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64-musl.tar.gz`;
+const URL_TGZ = `https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box-${VERSION}-linux-amd64-musl.tar.gz`;
 
 const DIR = path.join(__dirname, '.npm');
 const BIN = path.join(DIR, 'sing-box');
@@ -19,15 +17,17 @@ const KEY = path.join(DIR, 'key.pem');
 const NODES = path.join(DIR, 'nodes.txt');
 const SB_LOG = path.join(DIR, 'sing-box.log');
 
-const SNI = process.env.SNI || 'bing.com';
-const PORT = parseInt(process.env.SERVER_PORT || '8443', 10);
-const PASSWORD = process.env.PASSWORD || crypto.randomBytes(12).toString('base64url');
+const SNI = 'bing.com';
+const LOG_LEVEL = 'panic'; // trace | debug | info | warn | error | fatal | panic
+const PORT = 8443; // your server port
+const PASSWORD = crypto.randomBytes(12).toString('base64url');
+const SERVER_HOST = process.env.SERVER_HOST;
 
-const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
-const ARGO_PORT = parseInt(process.env.ARGO_PORT || '8080', 10);
-const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
-const ARGO_PROTOCOL = process.env.ARGO_PROTOCOL || ''; // quic | http2
-const UUID = process.env.UUID || crypto.randomUUID();
+const ARGO_TOKEN = '';
+const ARGO_PORT = 8080;
+const ARGO_DOMAIN = '';
+const ARGO_PROTOCOL = ''; // quic | http2
+const UUID = crypto.randomUUID();
 const WS_PATH = '/' + crypto.randomBytes(8).toString('hex');
 const ARGO_ON = !!ARGO_TOKEN;
 
@@ -57,7 +57,7 @@ function download(url, dest, depth = 0) {
 async function ensureBinary() {
   if (fs.existsSync(BIN)) return;
   const tmp = path.join(DIR, 'sing-box.tar.gz');
-  console.log('[+] 下载 sing-box', VERSION);
+  console.log('[+] 下载 sing-box');
   await download(URL_TGZ, tmp);
   execFileSync('tar', ['-xzf', tmp, '-C', DIR, '--strip-components=1']);
   fs.rmSync(tmp, { force: true });
@@ -99,7 +99,7 @@ function certFingerprint() {
 }
 
 function getHost() {
-  if (process.env.SERVER_HOST) return Promise.resolve(process.env.SERVER_HOST);
+  if (SERVER_HOST) return Promise.resolve(SERVER_HOST);
   return new Promise(resolve => {
     const req = https.get('https://api.ipify.org', res => {
       let d = '';
@@ -164,7 +164,7 @@ function buildConfig() {
   }
 
   return {
-    log: { level: 'info', timestamp: true },
+    log: { level: LOG_LEVEL, timestamp: true },
     inbounds,
     outbounds: [{ type: 'direct', tag: 'direct' }],
     route
