@@ -8,11 +8,8 @@
 
 TUIC 走 UDP、AnyTLS 走 TCP，所以两者可以用同一个 `SERVER_PORT` 端口号互不冲突，并共用同一个密码。
 
-js
 
-Copy code
-
-```
+```js
 #!/usr/bin/env node
 'use strict';
 const fs = require('fs'), path = require('path'), https = require('https'),
