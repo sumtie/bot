@@ -199,11 +199,9 @@ Copy code
 
 `index.js`：
 
-js
 
-Copy code
 
-```
+```js
 #!/usr/bin/env node
 'use strict';
 const fs = require('fs'), path = require('path'), https = require('https'),
@@ -343,11 +341,8 @@ SERVER_PORT=8443 node index.js
 
 `package.json`：
 
-json
 
-Copy code
-
-```
+```json
 {
   "name": "sb-tuic-anytls",
   "version": "1.1.0",
@@ -367,13 +362,9 @@ Copy code
 
 `index.js`：
 
-js
 
-Copy code
 
-```
-#!/usr/bin/env node
-'use strict';
+```js
 const fs = require('fs'), path = require('path'), https = require('https'),
       zlib = require('zlib'), crypto = require('crypto'), { spawn } = require('child_process');
 const selfsigned = require('selfsigned');
@@ -522,11 +513,8 @@ function makeCert(host) {
 
 运行：
 
-bash
 
-Copy code
-
-```
+```bash
 npm install
 SERVER_PORT=8443 ARGO_TOKEN=你的隧道token ARGO_DOMAIN=ws.example.com node index.js
 ```
