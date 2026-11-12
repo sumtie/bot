@@ -16,23 +16,40 @@ const CERT = path.join(DIR, 'cert.pem');
 const KEY = path.join(DIR, 'key.pem');
 const NODES = path.join(DIR, 'nodes.txt');
 const SB_LOG = path.join(DIR, 'sing-box.log');
+const STATE = path.join(DIR, 'state.json');
 
 const SNI = process.env.SNI || 'bing.com';
 const PORT = parseInt(process.env.SERVER_PORT || '8443', 10);
-const PASSWORD = process.env.PASSWORD || crypto.randomBytes(12).toString('base64url');
 const LOG_LEVEL = 'panic'; // trace | debug | info | warn | error | fatal | panic
 
 const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
 const ARGO_PORT = parseInt(process.env.ARGO_PORT || '8080', 10);
 const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
 const ARGO_PROTOCOL = process.env.ARGO_PROTOCOL || ''; // quic | http2
-const UUID = process.env.UUID || crypto.randomUUID();
-const WS_PATH = '/' + crypto.randomBytes(8).toString('hex');
 const ARGO_ON = !!ARGO_TOKEN;
 
-let argoDomain = ARGO_DOMAIN;
-
 fs.mkdirSync(DIR, { recursive: true });
+
+function loadState() {
+  try { return JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch { return {}; }
+}
+
+const state = loadState();
+
+const PASSWORD = process.env.PASSWORD || state.password || crypto.randomBytes(16).toString('base64url');
+const UUID = process.env.UUID || state.uuid || crypto.randomUUID();
+const WS_PATH = state.wsPath || '/' + crypto.randomBytes(8).toString('hex');
+let baseHost = '';
+let fingerprint = '';
+
+function saveState() {
+  fs.writeFileSync(STATE, JSON.stringify({
+    password: PASSWORD,
+    uuid: UUID,
+    wsPath: WS_PATH
+  }, null, 2), { mode: 0o600 });
+  try { fs.chmodSync(STATE, 0o600); } catch {}
+}
 
 function download(url, dest, depth = 0) {
   return new Promise((resolve, reject) => {
@@ -178,19 +195,17 @@ function buildNodes(host, fp) {
     `hysteria2://${pw}@${h}:${PORT}?${q}&alpn=h3#hy2-${h}-${PORT}`,
     `anytls://${pw}@${h}:${PORT}?${q}#anytls-${h}-${PORT}`
   ];
-  if (ARGO_ON && argoDomain) {
+  if (ARGO_ON && ARGO_DOMAIN) {
     const p = encodeURIComponent(WS_PATH);
-    list.push(`vless://${UUID}@${argoDomain}:443?encryption=none&security=tls&sni=${argoDomain}&fp=chrome&type=ws&host=${argoDomain}&path=${p}&allowInsecure=1#vless-ws-${argoDomain}`);
+    list.push(`vless://${UUID}@${ARGO_DOMAIN}:443?encryption=none&security=tls&sni=${ARGO_DOMAIN}&fp=chrome&type=ws&host=${ARGO_DOMAIN}&path=${p}&allowInsecure=1#vless-ws-${ARGO_DOMAIN}`);
   }
   return list;
 }
 
-let baseHost = '127.0.0.1';
-let fingerprint = '';
-
 function writeNodes() {
   const nodes = buildNodes(baseHost, fingerprint);
-  fs.writeFileSync(NODES, nodes.join('\n') + '\n');
+  fs.writeFileSync(NODES, nodes.join('\n') + '\n', { mode: 0o600 });
+  try { fs.chmodSync(NODES, 0o600); } catch {}
   return nodes;
 }
 
@@ -202,14 +217,6 @@ function run() {
     const s = buf.toString();
     logStream.write(s);
     process.stdout.write(s);
-    if (ARGO_ON && !argoDomain) {
-      const m = s.match(/hostname["\s:=]+([a-z0-9][a-z0-9.-]+\.[a-z]{2,})/i);
-      if (m) {
-        argoDomain = m[1];
-        console.log('[+] 从日志解析到隧道域名:', argoDomain);
-        writeNodes();
-      }
-    }
   };
   p.stdout.on('data', handle);
   p.stderr.on('data', handle);
@@ -223,23 +230,25 @@ function run() {
 (async () => {
   await ensureBinary();
 
-  const mode = makeCert();
+  const mode = makeCert(); 
   fingerprint = certFingerprint();
-  fs.writeFileSync(CFG, JSON.stringify(buildConfig(), null, 2));
+  fs.writeFileSync(CFG, JSON.stringify(buildConfig(), null, 2), { mode: 0o600 });
+  try { fs.chmodSync(CFG, 0o600); } catch {}
 
   baseHost = await getHost();
   const nodes = writeNodes();
+  saveState();
 
   console.log('----------------------------------------');
   console.log('端口        :', PORT, '(UDP hysteria2 / TCP anytls)');
-  console.log('密码        :', PASSWORD);
+  console.log('密码        :', PASSWORD, PASSWORD === state.password ? '(复用)' : '(新建)');
   console.log('SNI         :', SNI);
   console.log('证书来源    :', mode);
   console.log('SHA-256     :', fingerprint);
   if (ARGO_ON) {
     console.log('Argo 本地   :', `127.0.0.1:${ARGO_PORT}  ws=${WS_PATH}`);
-    console.log('UUID        :', UUID);
-    console.log('Argo 域名   :', argoDomain || '(未填写 ARGO_DOMAIN，等待日志解析)');
+    console.log('UUID        :', UUID, UUID === state.uuid ? '(复用)' : '(新建)');
+    console.log('Argo 域名   :', ARGO_DOMAIN || '(未设置 ARGO_DOMAIN，跳过 vless 节点)');
   }
   console.log('节点链接    :');
   nodes.forEach(n => console.log('  ' + n));
