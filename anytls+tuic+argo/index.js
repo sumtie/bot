@@ -1,27 +1,32 @@
-#!/usr/bin/env node
-'use strict';
 const fs = require('fs'), path = require('path'), https = require('https'),
       zlib = require('zlib'), crypto = require('crypto'), { spawn } = require('child_process');
 const selfsigned = require('selfsigned');
 
-const DIR = path.join(__dirname, '.npm');
-const BIN = path.join(DIR, 'sing-box'), CERT = path.join(DIR, 'cert.pem'), KEY = path.join(DIR, 'key.pem');
-const CONF = path.join(DIR, 'config.json'), LINK = path.join(DIR, 'links.txt');
-
-const SB_URL = process.env.SB_URL ||
-  'https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64-musl.tar.gz';
 const PORT = Number(process.env.SERVER_PORT || 8443);
-const SNI = process.env.SNI || 'www.bing.com';
-const PASSWORD = process.env.PASSWORD || crypto.randomBytes(12).toString('base64url');
-const UUID = crypto.randomUUID();
 
 const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
 const ARGO_PORT = Number(process.env.ARGO_PORT || 8080);
 const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
-const VLESS_UUID = crypto.randomUUID();
-const WS_PATH = '/' + crypto.randomBytes(6).toString('hex');
+const ARGO_PROTOCOL = ['http2', 'quic'].includes(process.env.ARGO_PROTOCOL) ? process.env.ARGO_PROTOCOL : '';
+
+const SB_URL = 'https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64-musl.tar.gz';
+const LOG_LEVEL = 'panic'; // trace | debug | info | warn | error | fatal | panic
+
+const DIR = path.join(__dirname, '.npm');
+const BIN = path.join(DIR, 'sing-box'), CERT = path.join(DIR, 'cert.pem'), KEY = path.join(DIR, 'key.pem');
+const CONF = path.join(DIR, 'config.json'), LINK = path.join(DIR, 'links.txt');
+const STATE = path.join(DIR, 'state.json');
 
 fs.mkdirSync(DIR, { recursive: true });
+function loadState() { try { return JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch { return {}; } }
+function saveState(s) { fs.writeFileSync(STATE, JSON.stringify(s, null, 2), { mode: 0o600 }); }
+const state = loadState();
+
+const SNI = process.env.SNI || 'www.bing.com';
+const PASSWORD = process.env.PASSWORD || state.password || crypto.randomBytes(16).toString('base64url');
+const UUID = state.uuid || crypto.randomUUID();
+const VLESS_UUID = state.vless_uuid || crypto.randomUUID();
+const WS_PATH = state.ws_path || '/' + crypto.randomBytes(6).toString('hex');
 
 /* ---------- 下载 ---------- */
 const get = (url, d = 0) => new Promise((ok, no) => {
@@ -88,6 +93,8 @@ function makeCert(host) {
     fs.writeFileSync(KEY, key, { mode: 0o600 });
   }
 
+  saveState({ password: PASSWORD, uuid: UUID, vless_uuid: VLESS_UUID, ws_path: WS_PATH });
+
   const inbounds = [
     {
       type: 'tuic', tag: 'tuic-in', listen: '::', listen_port: PORT,
@@ -116,7 +123,8 @@ function makeCert(host) {
     });
     inbounds.push({
       type: 'cloudflared', tag: 'argo-in', token: ARGO_TOKEN,
-      protocol: 'quic', edge_ip_version: 4
+      ...(ARGO_PROTOCOL ? { protocol: ARGO_PROTOCOL } : {}),
+      edge_ip_version: 4
     });
     route.rules.push({ inbound: ['argo-in'], outbound: 'direct' });
 
@@ -127,7 +135,7 @@ function makeCert(host) {
   }
 
   const cfg = {
-    log: { level: 'info', timestamp: true },
+    log: { level: LOG_LEVEL, timestamp: true },
     inbounds,
     outbounds: [{ type: 'direct', tag: 'direct' }],
     route
@@ -136,7 +144,7 @@ function makeCert(host) {
   fs.writeFileSync(LINK, links.join('\n') + '\n');
 
   console.log(`\n端口: ${PORT}  密码: ${PASSWORD}`);
-  if (ARGO_TOKEN) console.log(`Argo: 本地 ${ARGO_PORT}  path ${WS_PATH}  域名 ${ARGO_DOMAIN || '未填写'}`);
+  if (ARGO_TOKEN) console.log(`Argo: 本地 ${ARGO_PORT}  path ${WS_PATH}  域名 ${ARGO_DOMAIN || '未填写'}  protocol ${ARGO_PROTOCOL || '默认'}`);
   console.log('\n' + links.join('\n'));
 
   const child = spawn(BIN, ['run', '-c', CONF], { stdio: 'inherit' });
