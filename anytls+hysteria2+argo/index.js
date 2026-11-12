@@ -5,9 +5,15 @@ const http = require('http');
 const crypto = require('crypto');
 const { spawn, execFileSync } = require('child_process');
 
-const VERSION = '1.14.4';
-const PKG = `sing-box-${VERSION}-linux-amd64-musl`;
-const URL_TGZ = `https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/${PKG}.tar.gz`;
+const PORT =  Number(process.env.SERVER_PORT || 8443);
+
+const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
+const ARGO_PORT = Number(process.env.ARGO_PORT || 8080);
+const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
+const ARGO_PROTOCOL = process.env.ARGO_PROTOCOL || ''; // quic | http2
+const ARGO_ON = !!ARGO_TOKEN;
+
+const URL_TGZ = `https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64-musl.tar.gz`;
 
 const DIR = path.join(__dirname, '.npm');
 const BIN = path.join(DIR, 'sing-box');
@@ -19,14 +25,7 @@ const SB_LOG = path.join(DIR, 'sing-box.log');
 const STATE = path.join(DIR, 'state.json');
 
 const SNI = process.env.SNI || 'bing.com';
-const PORT = parseInt(process.env.SERVER_PORT || '8443', 10);
 const LOG_LEVEL = 'panic'; // trace | debug | info | warn | error | fatal | panic
-
-const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
-const ARGO_PORT = parseInt(process.env.ARGO_PORT || '8080', 10);
-const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
-const ARGO_PROTOCOL = process.env.ARGO_PROTOCOL || ''; // quic | http2
-const ARGO_ON = !!ARGO_TOKEN;
 
 fs.mkdirSync(DIR, { recursive: true });
 
@@ -73,7 +72,7 @@ function download(url, dest, depth = 0) {
 async function ensureBinary() {
   if (fs.existsSync(BIN)) return;
   const tmp = path.join(DIR, 'sing-box.tar.gz');
-  console.log('[+] 下载 sing-box', VERSION);
+  console.log('[+] 下载 sing-box');
   await download(URL_TGZ, tmp);
   execFileSync('tar', ['-xzf', tmp, '-C', DIR, '--strip-components=1']);
   fs.rmSync(tmp, { force: true });
