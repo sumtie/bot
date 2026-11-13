@@ -43,7 +43,7 @@ const out = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8' }).trim();
 const loadState = () => { try { return JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch { return {}; } };
 const saveState = (s) => { fs.writeFileSync(STATE, JSON.stringify(s, null, 2)); fs.chmodSync(STATE, 0o600); };
 const state = loadState();
-const PASSWORD = process.env.PASSWORD || state.password || crypto.randomBytes(9).toString('base64url');
+const PASSWORD = process.env.PASSWORD || state.password || crypto.randomBytes(16).toString('base64url');
 state.password = PASSWORD;
 
 // 1. 下载并解压二进制
