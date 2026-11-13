@@ -1,130 +1,123 @@
-const fs = require('fs');
-const net = require('net');
-const path = require('path');
+#!/usr/bin/env node
+'use strict';
+/**
+ * 部署 sing-box 1.11.4（hysteria2 / tuic）到本机
+ * 环境变量：
+ *   HY2_PORT   填端口启用 hysteria2（默认 0 关闭）
+ *   TUIC_PORT  填端口启用 tuic（默认 0 关闭）
+ *   PASSWORD   共用密码，留空用 state.json 里的或自动生成
+ *   SNI        证书 CN/SNI，默认 www.bing.com
+ *   HOST       节点域名/IP，留空自动探测
+ */
+const { execFileSync, spawn } = require('child_process');
 const crypto = require('crypto');
-const { execSync, spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
+const VERSION = '1.11.4';
 const DIR = path.join(__dirname, '.npm');
 const BIN = path.join(DIR, 'sing-box');
-const CFG = path.join(DIR, 'config.json');
 const CERT = path.join(DIR, 'cert.pem');
 const KEY = path.join(DIR, 'key.pem');
-const INFO = path.join(DIR, 'nodes.txt');
-const LOG = path.join(DIR, 'sing-box.log');
+const CONF = path.join(DIR, 'config.json');
+const NODES = path.join(DIR, 'nodes.txt');
 const STATE = path.join(DIR, 'state.json');
-const VERSION = '1.11.4';
-const ARCH = ({ x64: 'amd64', arm64: 'arm64', arm: 'armv7' })[process.arch] || 'amd64';
 
-const HY2_PORT = process.env.HY2_PORT;
-const TUIC_PORT = process.env.TUIC_PORT;
+const num = (v) => parseInt(v || '0', 10) || 0;
+const HY2_PORT = num(process.env.HY2_PORT);
+const TUIC_PORT = num(process.env.TUIC_PORT);
+const SNI = process.env.SNI || 'www.bing.com';
 
-const sh = (cmd) => execSync(cmd, { cwd: DIR, stdio: 'pipe' }).toString().trim();
-const freePort = () => new Promise((r) => {
-  const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => r(p)); });
-});
-const isPort = (v) => (v && Number(v) > 0 ? Number(v) : 0);
+const LOG_LEVEL = 'panic'; // trace | debug | info | warn | error | fatal | panic
 
-/* ---------- 0. 凭据: 环境变量 > state.json > 随机 ---------- */
-function loadState() {
-  let s = {};
-  try { s = JSON.parse(fs.readFileSync(STATE, 'utf8')) || {}; } catch {}
-  const next = {
-    pass: process.env.PASSWORD || s.pass || crypto.randomBytes(12).toString('base64url'),
-    uuid: process.env.UUID || s.uuid || crypto.randomUUID(),
-  };
-  if (next.pass !== s.pass || next.uuid !== s.uuid) {
-    fs.writeFileSync(STATE, JSON.stringify(next, null, 2), { mode: 0o600 });
-  }
-  return next;
+const ARCH = { x64: 'amd64', arm64: 'arm64', arm: 'armv7', ia32: '386' }[process.arch];
+if (!ARCH) { console.error('不支持的架构: ' + process.arch); process.exit(1); }
+if (HY2_PORT && TUIC_PORT && HY2_PORT === TUIC_PORT) { console.error('HY2_PORT 与 TUIC_PORT 不能相同'); process.exit(1); }
+if (!HY2_PORT && !TUIC_PORT) console.warn('[!] 两个端口都为空，不会启用任何节点');
+
+fs.mkdirSync(DIR, { recursive: true });
+const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { stdio: 'inherit', ...opts });
+const out = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8' }).trim();
+
+// 0. 复用 / 生成凭据
+const loadState = () => { try { return JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch { return {}; } };
+const saveState = (s) => { fs.writeFileSync(STATE, JSON.stringify(s, null, 2)); fs.chmodSync(STATE, 0o600); };
+const state = loadState();
+const PASSWORD = process.env.PASSWORD || state.password || crypto.randomBytes(9).toString('base64url');
+state.password = PASSWORD;
+
+// 1. 下载并解压二进制
+if (!fs.existsSync(BIN)) {
+  const name = `sing-box-${VERSION}-linux-${ARCH}`;
+  const tgz = path.join(DIR, 'sb.tar.gz');
+  console.log('[*] 下载 ' + name);
+  run('curl', ['-fL', '--retry', '3', '-o', tgz, `https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/${name}.tar.gz`]);
+  run('tar', ['-xzf', tgz, '-C', DIR]);
+  fs.renameSync(path.join(DIR, name, 'sing-box'), BIN);
+  fs.rmSync(path.join(DIR, name), { recursive: true, force: true });
+  fs.rmSync(tgz);
+  fs.chmodSync(BIN, 0o755);
 }
 
-(async () => {
-  fs.mkdirSync(DIR, { recursive: true });
-  const { pass: PASS, uuid: UUID } = loadState();
+// 2. 自签证书
+if (!fs.existsSync(CERT) || !fs.existsSync(KEY)) {
+  console.log('[*] 生成自签证书');
+  run('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1',
+    '-keyout', KEY, '-out', CERT, '-days', '3650', '-nodes',
+    '-subj', `/CN=${SNI}`, '-addext', `subjectAltName=DNS:${SNI}`]);
+  fs.chmodSync(KEY, 0o600);
+}
 
-  /* ---------- 1. 下载并解压 sing-box ---------- */
-  if (!fs.existsSync(BIN)) {
-    const pkg = `sing-box-${VERSION}-linux-${ARCH}`;
-    sh(`curl -fsSL -o sb.tar.gz https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/${pkg}.tar.gz`);
-    sh(`tar -xzf sb.tar.gz`);
-    fs.copyFileSync(path.join(DIR, pkg, 'sing-box'), BIN);
-    fs.rmSync(path.join(DIR, pkg), { recursive: true, force: true });
-    fs.rmSync(path.join(DIR, 'sb.tar.gz'), { force: true });
-    fs.chmodSync(BIN, 0o755);
-  }
+// 3. 证书 SHA-256 指纹（61:BC:FD:70:...）
+const FP = out('openssl', ['x509', '-in', CERT, '-noout', '-fingerprint', '-sha256']).split('=').pop().toUpperCase();
 
-  /* ---------- 2. 自签证书 + SHA-256 指纹 ---------- */
-  if (!fs.existsSync(CERT) || !fs.existsSync(KEY)) {
-    sh('openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 ' +
-       '-subj "/CN=www.bing.com" -keyout key.pem -out cert.pem 2>/dev/null');
-  }
-  const FP = sh('openssl x509 -in cert.pem -noout -fingerprint -sha256')
-    .split('=')[1].trim().toUpperCase();
+// 4. 公网地址
+let HOST = process.env.HOST || '';
+if (!HOST) { try { HOST = out('curl', ['-fsS', 'https://api.ipify.org']); } catch { HOST = '127.0.0.1'; } }
 
-  /* ---------- 3. 端口 / 地址 ---------- */
-  let hy2Port = isPort(HY2_PORT);
-  let tuicPort = isPort(TUIC_PORT);
-  if (!hy2Port && !tuicPort) hy2Port = await freePort();
-  if (hy2Port && tuicPort && hy2Port === tuicPort) {
-    console.error(`端口冲突: HY2_PORT 与 TUIC_PORT 不能相同 (${hy2Port})`);
-    process.exit(1);
-  }
+// 5. 生成配置与节点链接
+const tls = { enabled: true, server_name: SNI, alpn: ['h3'], certificate_path: CERT, key_path: KEY };
+const inbounds = [];
+const links = [];
 
-  let host = process.env.HOST || '';
-  if (!host) {
-    try { host = sh('curl -fsS --max-time 8 https://api.ipify.org'); } catch { host = '127.0.0.1'; }
-  }
-  const sni = process.env.SNI || (net.isIP(host) ? 'www.bing.com' : host);
-  const name = host.replace(/[.:]/g, '-');
+if (HY2_PORT) {
+  inbounds.push({ type: 'hysteria2', tag: 'hy2-in', listen: '::', listen_port: HY2_PORT, users: [{ password: PASSWORD }], tls });
+  links.push(`hysteria2://${encodeURIComponent(PASSWORD)}@${HOST}:${HY2_PORT}/?sni=${SNI}&alpn=h3&insecure=1&pinSHA256=${FP}#hy2-${HOST}`);
+}
 
-  /* ---------- 4. 生成配置 ---------- */
-  const tls = { enabled: true, certificate_path: CERT, key_path: KEY, alpn: ['h3'] };
-  const cfg = { log: { level: 'info', timestamp: true }, inbounds: [], outbounds: [{ type: 'direct', tag: 'direct' }] };
+if (TUIC_PORT) {
+  const uuid = state.tuicUuid || (state.tuicUuid = crypto.randomUUID());
+  // 注意：1.11 起 inbound 没有 udp_relay_mode，只有客户端 outbound 才有
+  inbounds.push({ type: 'tuic', tag: 'tuic-in', listen: '::', listen_port: TUIC_PORT, users: [{ uuid, password: PASSWORD }], congestion_control: 'bbr', tls });
+  links.push(`tuic://${uuid}:${encodeURIComponent(PASSWORD)}@${HOST}:${TUIC_PORT}?sni=${SNI}&alpn=h3&congestion_control=bbr&udp_relay_mode=native&allow_insecure=1&pinSHA256=${FP}#tuic-${HOST}`);
+}
 
-  if (hy2Port) cfg.inbounds.push({
-    type: 'hysteria2', tag: 'hy2', listen: '::', listen_port: hy2Port,
-    users: [{ password: PASS }], tls,
-  });
-  if (tuicPort) cfg.inbounds.push({
-    type: 'tuic', tag: 'tuic', listen: '::', listen_port: tuicPort,
-    users: [{ uuid: UUID, password: PASS }], congestion_control: 'bbr', tls,
-  });
+saveState(state); // 凭据落盘，重启复用
 
-  fs.writeFileSync(CFG, JSON.stringify(cfg, null, 2));
-  sh(`./sing-box check -c ${CFG}`);
+fs.writeFileSync(CONF, JSON.stringify({
+  log: { level: LOG_LEVEL, timestamp: true },
+  inbounds,
+  outbounds: [{ type: 'direct', tag: 'direct' }]
+}, null, 2));
 
-  /* ---------- 5. 节点链接 ---------- */
-  const links = [];
-  if (hy2Port) links.push(
-    `hysteria2://${encodeURIComponent(PASS)}@${host}:${hy2Port}/?sni=${sni}&insecure=1&pinSHA256=${FP}#hy2-${name}`
-  );
-  if (tuicPort) links.push(
-    `tuic://${UUID}:${encodeURIComponent(PASS)}@${host}:${tuicPort}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=${sni}&allow_insecure=1&pinSHA256=${FP}#tuic-${name}`
-  );
+// 6. 配置预校验
+try {
+  run(BIN, ['check', '-c', CONF]);
+} catch {
+  console.error('[x] 配置校验失败，见上方报错');
+  process.exit(1);
+}
 
-  const report = [
-    `# sing-box ${VERSION}`,
-    `密码: ${PASS}`,
-    tuicPort ? `TUIC UUID: ${UUID}` : '',
-    `SHA-256: ${FP}`,
-    '', ...links, '',
-  ].filter(Boolean).join('\n');
-  fs.writeFileSync(INFO, report, { mode: 0o600 });
+// 7. 落地文件 + 输出
+fs.writeFileSync(NODES, `# 密码: ${PASSWORD}\n# 证书 SHA-256: ${FP}\n${links.join('\n')}\n`);
+console.log('\n===== 节点信息 =====');
+console.log('密码:', PASSWORD);
+console.log('证书 SHA-256:', FP);
+links.forEach((l) => console.log(l));
+console.log('凭据已保存:', STATE, '(重启自动复用)');
+console.log('节点已写入:', NODES, '\n');
 
-  /* ---------- 6. 重启并启动 ---------- */
-  try { execSync('pkill -f ".npm/sing-box run"'); } catch {}
-  await new Promise((r) => setTimeout(r, 400));
-
-  const out = fs.openSync(LOG, 'a');
-  const proc = spawn(BIN, ['run', '-c', CFG], { cwd: DIR, detached: true, stdio: ['ignore', out, out] });
-  proc.unref();
-
-  await new Promise((r) => setTimeout(r, 1200));
-  if (proc.exitCode !== null) {
-    console.error('启动失败，日志:\n' + fs.readFileSync(LOG, 'utf8').split('\n').slice(-15).join('\n'));
-    process.exit(1);
-  }
-
-  console.log(report);
-  console.log(`节点文件: ${INFO}\n日志: ${LOG}\n状态: ${STATE}`);
-})().catch((e) => { console.error(e.message || e); process.exit(1); });
+// 8. 启动
+const child = spawn(BIN, ['run', '-c', CONF], { stdio: 'inherit' });
+['SIGINT', 'SIGTERM'].forEach((s) => process.on(s, () => child.kill(s)));
+child.on('exit', (c) => process.exit(c || 0));
