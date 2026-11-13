@@ -33,6 +33,8 @@ if (HY2_PORT && TUIC_PORT && HY2_PORT === TUIC_PORT) {
   process.exit(1);
 }
 
+const LOG_LEVEL = 'panic'; // trace | debug | info | warn | error | fatal | panic
+
 function download(url, dest, depth = 0) {
   return new Promise((resolve, reject) => {
     if (depth > 8) return reject(new Error('重定向过多'));
@@ -152,7 +154,7 @@ async function main() {
   }
 
   fs.writeFileSync(CFG, JSON.stringify({
-    log: { level: 'info', timestamp: true },
+    log: { level: LOG_LEVEL, timestamp: true },
     inbounds,
     outbounds: [{ type: 'direct', tag: 'direct' }],
     route: { final: 'direct' },
