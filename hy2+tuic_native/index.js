@@ -11,13 +11,12 @@ const CERT = path.join(DIR, 'cert.pem');
 const KEY = path.join(DIR, 'key.pem');
 const INFO = path.join(DIR, 'nodes.txt');
 const LOG = path.join(DIR, 'sing-box.log');
+const STATE = path.join(DIR, 'state.json');
 const VERSION = '1.11.4';
 const ARCH = ({ x64: 'amd64', arm64: 'arm64', arm: 'armv7' })[process.arch] || 'amd64';
 
 const HY2_PORT = process.env.HY2_PORT;
 const TUIC_PORT = process.env.TUIC_PORT;
-const PASS = process.env.PASSWORD || crypto.randomBytes(n).toString('base64url');
-const UUID = crypto.randomUUID();
 
 const sh = (cmd) => execSync(cmd, { cwd: DIR, stdio: 'pipe' }).toString().trim();
 const freePort = () => new Promise((r) => {
@@ -25,8 +24,23 @@ const freePort = () => new Promise((r) => {
 });
 const isPort = (v) => (v && Number(v) > 0 ? Number(v) : 0);
 
+/* ---------- 0. 凭据: 环境变量 > state.json > 随机 ---------- */
+function loadState() {
+  let s = {};
+  try { s = JSON.parse(fs.readFileSync(STATE, 'utf8')) || {}; } catch {}
+  const next = {
+    pass: process.env.PASSWORD || s.pass || crypto.randomBytes(12).toString('base64url'),
+    uuid: process.env.UUID || s.uuid || crypto.randomUUID(),
+  };
+  if (next.pass !== s.pass || next.uuid !== s.uuid) {
+    fs.writeFileSync(STATE, JSON.stringify(next, null, 2), { mode: 0o600 });
+  }
+  return next;
+}
+
 (async () => {
   fs.mkdirSync(DIR, { recursive: true });
+  const { pass: PASS, uuid: UUID } = loadState();
 
   /* ---------- 1. 下载并解压 sing-box ---------- */
   if (!fs.existsSync(BIN)) {
@@ -47,7 +61,7 @@ const isPort = (v) => (v && Number(v) > 0 ? Number(v) : 0);
   const FP = sh('openssl x509 -in cert.pem -noout -fingerprint -sha256')
     .split('=')[1].trim().toUpperCase();
 
-  /* ---------- 3. 端口 / 密码 / 地址 ---------- */
+  /* ---------- 3. 端口 / 地址 ---------- */
   let hy2Port = isPort(HY2_PORT);
   let tuicPort = isPort(TUIC_PORT);
   if (!hy2Port && !tuicPort) hy2Port = await freePort();
@@ -112,5 +126,5 @@ const isPort = (v) => (v && Number(v) > 0 ? Number(v) : 0);
   }
 
   console.log(report);
-  console.log(`节点文件: ${INFO}\n日志: ${LOG}`);
+  console.log(`节点文件: ${INFO}\n日志: ${LOG}\n状态: ${STATE}`);
 })().catch((e) => { console.error(e.message || e); process.exit(1); });
