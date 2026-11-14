@@ -48,13 +48,18 @@ fs.writeFileSync(STATE, JSON.stringify({ password, uuid, wsPath }, null, 2), { m
 
 /* ---------------- 端口 ---------------- */
 const P = (v) => { const n = parseInt(v, 10); return n > 0 && n < 65536 ? n : 0; };
-const hy2Port = P(process.env.HY2_PORT);
-const tuicPort = P(process.env.TUIC_PORT);
-const anyPort = P(process.env.ANYTLS_PORT);
+const hy2Port = P(process.env.HY2_PORT) || 0;
+const tuicPort = P(process.env.TUIC_PORT) || 0;
+const anyPort = P(process.env.ANYTLS_PORT) || 0;
 const argoPort = P(process.env.ARGO_PORT) || 8080;
 
 const used = {};
-for (const [k, p] of Object.entries({ HY2_PORT: hy2Port, TUIC_PORT: tuicPort, ANYTLS_PORT: anyPort, ARGO_PORT: argoPort })) {
+// for (const [k, p] of Object.entries({ HY2_PORT: hy2Port, TUIC_PORT: tuicPort, ANYTLS_PORT: anyPort, ARGO_PORT: argoPort })) {
+//   if (!p) continue;
+//   if (used[p]) { console.error(`端口冲突: ${k} 与 ${used[p]} 都是 ${p}`); process.exit(1); }
+//   used[p] = k;
+// }
+for (const [k, p] of Object.entries({ HY2_PORT: hy2Port, TUIC_PORT: tuicPort, ARGO_PORT: argoPort })) {
   if (!p) continue;
   if (used[p]) { console.error(`端口冲突: ${k} 与 ${used[p]} 都是 ${p}`); process.exit(1); }
   used[p] = k;
@@ -97,7 +102,7 @@ if (hy2Port) inbounds.push({
 if (tuicPort) inbounds.push({
   type: 'tuic', tag: 'tuic', listen: '::', listen_port: tuicPort,
   users: [{ uuid, password }],
-  congestion_control: 'bbr', auth_timeout: '3s', heartbeat: '10s',
+  congestion_control: 'bbr',
   tls: { enabled: true, server_name: SNI, alpn: ['h3'], certificate_path: crt, key_path: key }
 });
 
@@ -114,11 +119,9 @@ inbounds.push({
 });
 
 const config = {
-  log: { level: 'info', timestamp: true },
-  dns: { servers: [{ type: 'tls', tag: 'dns', server: '8.8.8.8' }] },
+  log: { disabled: true, level: 'info', timestamp: true },
   inbounds,
   outbounds: [{ type: 'direct', tag: 'direct' }],
-  route: { rules: [{ action: 'sniff' }, { action: 'resolve', server: 'dns' }] }
 };
 
 const CFG = path.join(DIR, 'config.json');
