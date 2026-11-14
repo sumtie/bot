@@ -16,6 +16,29 @@ const KEY = path.join(DIR, 'key.pem');
 const CONF = path.join(DIR, 'config.json');
 const LINKS = path.join(DIR, 'links.txt');
 
+/* ---------------- 自动获取公网 IP ---------------- */
+function getPublicIP() {
+  const services = [
+    'https://api.ipify.org',
+    'https://ipv4.icanhazip.com',
+    'https://checkip.amazonaws.com'
+  ];
+
+  for (const url of services) {
+    try {
+      const ip = execFileSync('curl', [
+        '-4', '-fsSL', '--max-time', '5', url
+      ], { encoding: 'utf8' }).trim();
+
+      if (/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) {
+        return ip;
+      }
+    } catch {}
+  }
+
+  return '127.0.0.1';
+}
+
 /* ---------------- 环境变量 ---------------- */
 const HY2_PORT = Number(process.env.HY2_PORT) || 0;
 const TUIC_PORT = Number(process.env.TUIC_PORT) || 0;
@@ -24,7 +47,7 @@ const ARGO_PORT = Number(process.env.ARGO_PORT) || 8080;
 const ARGO_TOKEN = (process.env.ARGO_TOKEN || '').trim();
 const ARGO_DOMAIN = (process.env.ARGO_DOMAIN || '').trim() || '<your-tunnel-domain>';
 const SNI = (process.env.SNI || '').trim() || 'bing.com';
-const HOST = (process.env.PUBLIC_HOST || '').trim() || '<server-ip>';
+const HOST = (process.env.PUBLIC_HOST || '').trim() || getPublicIP();
 
 const die = (m) => { console.error('[!] ' + m); process.exit(1); };
 const sh = (cmd, args, opt = {}) => execFileSync(cmd, args, { stdio: 'inherit', ...opt });
@@ -35,8 +58,8 @@ const ARCH = { x64: 'amd64', arm64: 'arm64' }[process.arch];
 if (!ARCH) die('只支持 amd64 / arm64，当前: ' + process.arch);
 
 if (HY2_PORT && TUIC_PORT && HY2_PORT === TUIC_PORT) die('HY2_PORT 与 TUIC_PORT 不能相同');
-for (const [a, b] of [[HY2_PORT, ANYTLS_PORT], [TUIC_PORT, ANYTLS_PORT]])
-  if (a && b && a === b) die('ANYTLS_PORT 与其它节点端口冲突');
+// for (const [a, b] of [[HY2_PORT, ANYTLS_PORT], [TUIC_PORT, ANYTLS_PORT]])
+//   if (a && b && a === b) die('ANYTLS_PORT 与其它节点端口冲突');
 
 fs.mkdirSync(DIR, { recursive: true });
 
@@ -102,7 +125,7 @@ if (ANYTLS_PORT) {
     type: 'anytls', tag: 'anytls-in', listen: '::', listen_port: ANYTLS_PORT,
     users: [{ name: 'v', password: state.password }], tls: tls()
   });
-  links.push(`anytls://${state.password}@${HOST}:${ANYTLS_PORT}?sni=${SNI}&allowInsecure=1&fp=${SHA256}#anytls`);
+  links.push(`anytls://${state.password}@${HOST}:${ANYTLS_PORT}?sni=${SNI}&insecure=1&pinSHA256=${SHA256}#anytls`);
 }
 
 if (ARGO_TOKEN) {
@@ -112,20 +135,15 @@ if (ARGO_TOKEN) {
     transport: { type: 'ws', path: state.wsPath }
   });
   inbounds.push({ type: 'cloudflared', tag: 'argo-in', token: ARGO_TOKEN });
-  links.push(`vless://${state.uuid}@${ARGO_DOMAIN}:443?encryption=none&security=tls&sni=${ARGO_DOMAIN}&fp=${SHA256}&type=ws&host=${ARGO_DOMAIN}&path=${encodeURIComponent(state.wsPath)}#argo-ws`);
+  links.push(`vless://${state.uuid}@${ARGO_DOMAIN}:443?encryption=none&security=tls&sni=${ARGO_DOMAIN}&pinSHA256=${SHA256}&type=ws&host=${ARGO_DOMAIN}&path=${encodeURIComponent(state.wsPath)}#argo-ws`);
 }
 
 if (!inbounds.length) die('未启用任何节点：请设置 HY2_PORT / TUIC_PORT / ANYTLS_PORT / ARGO_TOKEN');
 
 const config = {
-  log: { level: 'info', timestamp: true },
-  dns: { servers: [{ type: 'local', tag: 'local' }] },
+  log: { "disabled": true, level: 'info', timestamp: true },
   inbounds,
-  outbounds: [{ type: 'direct', tag: 'direct' }],
-  route: {
-    rules: [{ action: 'sniff' }, { protocol: 'dns', action: 'hijack-dns' }],
-    final: 'direct'
-  }
+  outbounds: [{ type: 'direct', tag: 'direct' }]
 };
 
 fs.writeFileSync(CONF, JSON.stringify(config, null, 2), { mode: 0o600 });
