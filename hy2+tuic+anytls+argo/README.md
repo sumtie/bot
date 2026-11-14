@@ -16,6 +16,6 @@ index.js同目录下创建.npm文件夹，二进制、节点链接等文件统�
 
 密码、uuid、WS_PATH存到.npm/state.json里面，重启可复用
 
-以sing-box官方最新文档为主，编写代码配置
+以sing-box官方最新文档https://sing-box.sagernet.org/为主，编写代码配置
 
 简洁代码
