@@ -141,7 +141,7 @@ if (ARGO_TOKEN) {
 if (!inbounds.length) die('未启用任何节点：请设置 HY2_PORT / TUIC_PORT / ANYTLS_PORT / ARGO_TOKEN');
 
 const config = {
-  log: { "disabled": true, level: 'info', timestamp: true },
+  log: { disabled: true, level: 'info', timestamp: true },
   inbounds,
   outbounds: [{ type: 'direct', tag: 'direct' }]
 };
