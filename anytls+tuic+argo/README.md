@@ -175,11 +175,10 @@ openssl无法使用，用selfsigned，还有给我package.json
 
 `package.json`：
 
-json
 
-Copy code
 
-```
+
+```json
 {
   "name": "sb-tuic-anytls",
   "version": "1.0.0",
@@ -322,11 +321,9 @@ function makeCert(host) {
 
 运行：
 
-bash
 
-Copy code
 
-```
+```bash
 npm install
 SERVER_PORT=8443 node index.js
 ```
