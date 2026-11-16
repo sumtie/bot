@@ -7,7 +7,7 @@ const zlib = require('zlib');
 
 const hy2Port = process.env.HY2_PORT || 8443;
 const argoPort = process.env.ARGO_PORT || 8080;
-const argoDomain = process.env.ARGO_DOMAIN || 'yourArgo.com';
+const argoDomain = process.env.ARGO_DOMAIN || '';
 const argoToken = process.env.ARGO_TOKEN || '';
 
 // 日志开关：优先读取环境变量 ENABLE_LOG，默认 false（关闭日志）
