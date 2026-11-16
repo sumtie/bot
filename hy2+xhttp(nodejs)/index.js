@@ -143,7 +143,7 @@ async function main() {
         "finalmask": {
           "quicParams": {
             "congestion": "brutal",
-            "brutalUp": "20 Mbps",
+            "brutalUp": "100 Mbps",
             "brutalDown": "100 Mbps"
           }
         }
