@@ -1,3 +1,7 @@
+
+
+gemini提示词：
+```
 编写index.js，
 
 curl下载https://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-linux-64.zip，防止OOM
@@ -23,3 +27,4 @@ index.js同目录下创建.npm文件夹，二进制、节点链接等文件统�
 enableLog变量为true，xray和argo日志正常显示，为false关闭日志
 
 简洁代码
+```
