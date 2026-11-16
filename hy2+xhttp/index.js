@@ -5,6 +5,14 @@ const crypto = require('crypto');
 const os = require('os');
 const zlib = require('zlib');
 
+const hy2Port = process.env.HY2_PORT || 8443;
+const argoPort = process.env.ARGO_PORT || 8080;
+const argoDomain = process.env.ARGO_DOMAIN || 'yourArgo.com';
+const argoToken = process.env.ARGO_TOKEN || '';
+
+// 日志开关：优先读取环境变量 ENABLE_LOG，默认 false（关闭日志）
+const enableLog = false; // true | false
+
 // 1. 系统与架构检查
 if (process.platform !== 'linux') {
   console.error('错误: 本脚本仅支持 Linux 系统。');
@@ -26,16 +34,11 @@ if (fs.existsSync(stateFile)) {
   try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch (e) {}
 }
 
-const password = state.password || crypto.randomBytes(16).toString('hex');
+const password = state.password || crypto.randomBytes(8).toString('hex');
 const uuid = state.uuid || crypto.randomUUID();
-const xhttpPath = state.xhttpPath || crypto.randomBytes(8).toString('hex');
+const xhttpPath = state.xhttpPath || crypto.randomBytes(4).toString('hex');
 state = { password, uuid, xhttpPath };
 fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
-
-const hy2Port = process.env.HY2_PORT || 8443;
-const argoPort = process.env.ARGO_PORT || 8080;
-const argoDomain = process.env.ARGO_DOMAIN || '';
-const argoToken = process.env.ARGO_TOKEN || '';
 
 // 纯 Node.js 实现的 ZIP 解压函数（防止 OOM，适配无 unzip 主机）
 function extractZipPureJS(zipPath, targetDir) {
@@ -152,7 +155,7 @@ if (enableArgo) {
 }
 
 const xrayConfig = {
-  "log": { "loglevel": "warning" },
+  "log": { "loglevel": enableLog ? "warning" : "none" },
   "inbounds": inbounds,
   "outbounds": [{ "protocol": "freedom" }]
 };
@@ -180,15 +183,18 @@ console.log('\n=== 部署完成 ===');
 links.forEach(l => console.log(l));
 console.log(`节点链接已写入: ${linksFile}\n`);
 
-// 8. 启动服务
+// 8. 启动服务（根据 enableLog 控制子进程输出流）
+const stdioMode = enableLog ? 'inherit' : 'ignore';
 const configFile = path.join(npmDir, 'config.json');
-const xrayProcess = spawn(xrayBin, ['run', '-c', configFile], { stdio: 'inherit' });
+const xrayProcess = spawn(xrayBin, ['run', '-c', configFile], { stdio: stdioMode });
 
+let argoProcess = null;
 if (enableArgo) {
-  spawn(cloudflaredBin, ['tunnel', '--no-autoupdate', 'run', '--token', argoToken], { stdio: 'inherit' });
+  argoProcess = spawn(cloudflaredBin, ['tunnel', '--no-autoupdate', 'run', '--token', argoToken], { stdio: stdioMode });
 }
 
 process.on('SIGINT', () => {
   xrayProcess.kill();
+  if (argoProcess) argoProcess.kill();
   process.exit();
 });
