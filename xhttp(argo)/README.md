@@ -18,5 +18,7 @@ uuid、XHTTPPATH存到.npm/state.json里面，重启可复用
 
 index.js同目录下创建.npm文件夹，二进制、节点链接等文件统一放进去，
 
+enableLog变量为true，xray和argo日志正常显示，为false关闭日志
+
 简洁代码
 ```
