@@ -20,4 +20,6 @@ index.js同目录下创建.npm文件夹，二进制、节点链接等文件统�
 
 按照最新的https://xtls.github.io/文档来写
 
+enableLog变量为true，xray和argo日志正常显示，为false关闭日志
+
 简洁代码
