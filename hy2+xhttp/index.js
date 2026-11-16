@@ -34,9 +34,9 @@ if (fs.existsSync(stateFile)) {
   try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch (e) {}
 }
 
-const password = state.password || crypto.randomBytes(8).toString('hex');
+const password = state.password || crypto.randomBytes(16).toString('hex');
 const uuid = state.uuid || crypto.randomUUID();
-const xhttpPath = state.xhttpPath || crypto.randomBytes(4).toString('hex');
+const xhttpPath = state.xhttpPath || crypto.randomBytes(8).toString('hex');
 state = { password, uuid, xhttpPath };
 fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
 
