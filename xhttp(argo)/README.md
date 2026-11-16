@@ -1,3 +1,5 @@
+注意：临时隧道不支持xhttp，只能使用固定隧道。也就是必须有域名(免费域名也可以)托管在cloudflare上面，创建固定隧道Tunnel来使用。
+
 # 与 Gemini 对话
 
 ##### 你说 编写index.js， fetch下载https\://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-linux-64.zip，防…
