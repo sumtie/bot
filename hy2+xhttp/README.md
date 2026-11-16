@@ -4,7 +4,7 @@ curl下载https://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-linu
 
 curl下载cloudflared最新版，防止OOM
 
-tar/unzip解压 部署在nodejs主机上，只考虑linux系统amd64和arm64。
+tar/编写zip解压函数解压 部署在nodejs主机上，只考虑linux系统amd64和arm64。
 
 部署hysteria2节点(xray本身支持，无需额外下载hysteria二进制)，brutal模式，上行宽带20MB，下行带宽100MB，HY2_PORT默认8443，密码随机生成
 
