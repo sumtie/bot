@@ -1,8 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import zlib from 'zlib';
 import { pipeline } from 'stream/promises';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import crypto from 'crypto';
 
 const NPM_DIR = path.join(import.meta.dirname, '.npm');
@@ -42,46 +41,33 @@ async function downloadFile(url, dest) {
     await pipeline(res.body, fs.createWriteStream(dest));
 }
 
-// 零依赖原生提取 ZIP 中的指定文件
-function extractFromZip(zipPath, targetName, destPath) {
-    const buf = fs.readFileSync(zipPath);
-    let offset = 0;
-    while (offset + 30 < buf.length && buf.readUInt32LE(offset) === 0x04034b50) {
-        const method = buf.readUInt16LE(offset + 8);
-        const compSize = buf.readUInt32LE(offset + 18);
-        const nameLen = buf.readUInt16LE(offset + 26);
-        const extraLen = buf.readUInt16LE(offset + 28);
-        const fileName = buf.toString('utf8', offset + 30, offset + 30 + nameLen);
-        const dataStart = offset + 30 + nameLen + extraLen;
-
-        if (fileName === targetName) {
-            const raw = buf.subarray(dataStart, dataStart + compSize);
-            const data = method === 8 ? zlib.inflateRawSync(raw) : raw;
-            fs.writeFileSync(destPath, data, { mode: 0o755 });
-            return;
-        }
-        offset = dataStart + compSize;
-    }
-    throw new Error(`${targetName} not found in ${zipPath}`);
-}
-
-// 3. 架构适配与核心二进制下载部署
+// 3. 架构适配与核心二进制下载部署（改为 tar.gz）
 async function setupBinaries() {
-    const arch = process.arch === 'arm64' ? 'arm64-v8a' : '64';
+    // 适配你仓库中的文件名：myXray-linux-amd64.tar.gz / myXray-linux-arm64.tar.gz
+    const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
     const cfArch = process.arch === 'arm64' ? 'arm64' : 'amd64';
 
-    const xrayZip = path.join(NPM_DIR, 'xray.zip');
-    const xrayUrl = `https://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-linux-${arch}.zip`;
+    const xrayTar = path.join(NPM_DIR, 'xray.tar.gz');
+    const xrayUrl = `https://github.com/haha/mypo/raw/refs/heads/main/myXray-linux-${arch}.tar.gz`;
     const cfUrl = `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cfArch}`;
 
-    await downloadFile(xrayUrl, xrayZip);
+    await downloadFile(xrayUrl, xrayTar);
     await downloadFile(cfUrl, CF_BIN);
     fs.chmodSync(CF_BIN, 0o755);
 
-    // 原生解压 Xray
+    // 解压 Xray tar.gz（利用 Linux 系统自带的 tar 命令，零依赖）
     if (!fs.existsSync(XRAY_BIN)) {
         console.log('Extracting Xray...');
-        extractFromZip(xrayZip, 'xray', XRAY_BIN);
+        // 解压到 .npm 目录中
+        execSync(`tar -xzf ${xrayTar} -C ${NPM_DIR}`);
+        // 确保解压出来的 xray 可执行文件有权限
+        if (fs.existsSync(XRAY_BIN)) {
+            fs.chmodSync(XRAY_BIN, 0o755);
+        } else {
+            // 如果你压缩包里面的二进制名字不同，可以在这里做兼容重命名
+            // 假设你打包进去的文件名就是 xray
+            throw new Error('Extraction finished, but xray binary not found in expected path.');
+        }
     }
 }
 
