@@ -1,9 +1,8 @@
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const crypto = require('crypto');
 const os = require('os');
-const zlib = require('zlib');
 const { pipeline } = require('stream/promises');
 const { Readable } = require('stream');
 const selfsigned = require('selfsigned');
@@ -13,9 +12,8 @@ const argoPort = process.env.ARGO_PORT || 8080;
 const argoToken = process.env.ARGO_TOKEN || '';
 const argoDomain = process.env.ARGO_DOMAIN || '';
 
-// 日志开关（默认关闭，设置对应变量为 true 或 1 时开启）
-const argoLog = false; // true | false
-const xrayLog = false; // true | false
+// 统一的日志开关（默认关闭，设置为 true 时同时开启 Xray 与 Argo 日志）
+const enableLog = false; // true | false
 
 // 1. 系统与架构检查
 if (process.platform !== 'linux') {
@@ -44,68 +42,6 @@ const xhttpPath = state.xhttpPath || crypto.randomBytes(8).toString('hex');
 state = { password, uuid, xhttpPath };
 fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
 
-// 纯 Node.js 实现的流式/分块 ZIP 解压函数（防止 OOM，适配无 unzip 主机）
-function extractZipPureJS(zipPath, targetDir) {
-  const fd = fs.openSync(zipPath, 'r');
-  const stat = fs.fstatSync(fd);
-  const fileSize = stat.size;
-  let offset = 0;
-
-  try {
-    while (offset < fileSize) {
-      const headerBuf = Buffer.alloc(30);
-      const bytesRead = fs.readSync(fd, headerBuf, 0, 30, offset);
-      if (bytesRead < 30) break;
-
-      if (headerBuf.readUInt32LE(0) !== 0x04034b50) break;
-
-      const compression = headerBuf.readUInt16LE(8);
-      const compressedSize = headerBuf.readUInt32LE(18);
-      const fileNameLength = headerBuf.readUInt16LE(26);
-      const extraFieldLength = headerBuf.readUInt16LE(28);
-
-      const nameExtraBuf = Buffer.alloc(fileNameLength + extraFieldLength);
-      fs.readSync(fd, nameExtraBuf, 0, fileNameLength + extraFieldLength, offset + 30);
-      const fileName = nameExtraBuf.toString('utf8', 0, fileNameLength);
-
-      const dataStart = offset + 30 + fileNameLength + extraFieldLength;
-      const targetPath = path.join(targetDir, fileName);
-
-      if (fileName.endsWith('/')) {
-        fs.mkdirSync(targetPath, { recursive: true });
-      } else {
-        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-
-        if (compression === 8) {
-          // 压缩数据：读取对应大小的数据块并通过 zlib 解压
-          const compressedBuf = Buffer.alloc(compressedSize);
-          fs.readSync(fd, compressedBuf, 0, compressedSize, dataStart);
-          const decompressed = zlib.inflateRawSync(compressedBuf);
-          fs.writeFileSync(targetPath, decompressed);
-        } else if (compression === 0) {
-          // 未压缩数据：使用流式分块写入，避免大文件占用过多内存
-          const writeStream = fs.createWriteStream(targetPath);
-          let remaining = compressedSize;
-          let currentDataOffset = dataStart;
-          const chunkSize = 64 * 1024;
-          const chunkBuf = Buffer.alloc(chunkSize);
-          while (remaining > 0) {
-            const toRead = Math.min(chunkSize, remaining);
-            fs.readSync(fd, chunkBuf, 0, toRead, currentDataOffset);
-            writeStream.write(chunkBuf.subarray(0, toRead));
-            currentDataOffset += toRead;
-            remaining -= toRead;
-          }
-          writeStream.end();
-        }
-      }
-      offset = dataStart + compressedSize;
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
 // 使用 fetch 配合流式写入下载文件，防 OOM
 async function downloadFile(url, dest) {
   const res = await fetch(url);
@@ -114,18 +50,26 @@ async function downloadFile(url, dest) {
 }
 
 async function main() {
-  // 3. 下载 Xray-core 并解压
+  // 3. 下载自定义 Xray-core (.tar.gz) 并使用系统 tar 命令解压
   const xrayBin = path.join(npmDir, 'xray');
   if (!fs.existsSync(xrayBin)) {
     console.log('正在下载 Xray-core...');
-    const xrayZipName = arch === 'x64' ? 'Xray-linux-64.zip' : 'Xray-linux-arm64-v8a.zip';
-    const xrayUrl = `https://github.com/XTLS/Xray-core/releases/download/v26.11.9/${xrayZipName}`;
-    const zipPath = path.join(npmDir, 'xray.zip');
+    const tarFileName = arch === 'x64' ? 'myXray-linux-amd64.tar.gz' : 'myXray-linux-arm64.tar.gz';
+    const xrayUrl = `https://github.com/haha/mypo/raw/refs/heads/main/${tarFileName}`;
+    const tarPath = path.join(npmDir, 'xray.tar.gz');
     
-    await downloadFile(xrayUrl, zipPath);
-    extractZipPureJS(zipPath, npmDir);
-    if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-    fs.chmodSync(xrayBin, 0o755);
+    await downloadFile(xrayUrl, tarPath);
+    
+    console.log('正在解压 Xray-core...');
+    execSync(`tar -xzf "${tarPath}" -C "${npmDir}"`);
+    
+    if (fs.existsSync(tarPath)) fs.unlinkSync(tarPath);
+    if (fs.existsSync(xrayBin)) {
+      fs.chmodSync(xrayBin, 0o755);
+    } else {
+      console.error('错误: 解压后未找到 xray 可执行文件，请检查压缩包内的文件名是否正确。');
+      process.exit(1);
+    }
   }
 
   // 4. 使用 selfsigned 生成自签证书及计算 SHA-256 指纹
@@ -199,7 +143,7 @@ async function main() {
   }
 
   const xrayConfig = {
-    "log": { "loglevel": xrayLog ? "warning" : "none" },
+    "log": { "loglevel": enableLog ? "warning" : "none" },
     "inbounds": inbounds,
     "outbounds": [{ "protocol": "freedom" }]
   };
@@ -231,15 +175,15 @@ async function main() {
   // 8. 启动服务
   const configFile = path.join(npmDir, 'config.json');
   
-  // 根据 xrayLog 动态控制 Xray 的 stdio 输出
+  // 根据 enableLog 动态控制 Xray 的 stdio 输出
   const xrayProcess = spawn(xrayBin, ['run', '-c', configFile], { 
-    stdio: xrayLog ? 'inherit' : 'ignore' 
+    stdio: enableLog ? 'inherit' : 'ignore' 
   });
 
   if (enableArgo) {
-    // 根据 argoLog 动态控制 Argo 的 stdio 输出
+    // 根据 enableLog 动态控制 Argo 的 stdio 输出
     spawn(cloudflaredBin, ['tunnel', '--no-autoupdate', 'run', '--token', argoToken], { 
-      stdio: argoLog ? 'inherit' : 'ignore' 
+      stdio: enableLog ? 'inherit' : 'ignore' 
     });
   }
 
