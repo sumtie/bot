@@ -183,7 +183,7 @@ async function main() {
   } catch (e) {}
 
   let links = [
-    `hysteria2://${password}@${serverIp}:${hy2Port}?sni=bing.com&insecure=1&pinSHA256=${sha256Pin}&congestion=brutal&up=20Mbps&down=100Mbps#Hysteria2-Brutal`
+    `hysteria2://${password}@${serverIp}:${hy2Port}?sni=bing.com&insecure=1&pinSHA256=${sha256Pin}&congestion=brutal&up=100Mbps&down=100Mbps#Hysteria2-Brutal`
   ];
 
   if (enableArgo) {
