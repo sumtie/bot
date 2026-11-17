@@ -3,7 +3,6 @@ const path = require('path');
 const { execSync, spawn } = require('child_process');
 const crypto = require('crypto');
 const os = require('os');
-const zlib = require('zlib');
 
 const hy2Port = process.env.HY2_PORT || 8443;
 const argoPort = process.env.ARGO_PORT || 8080;
@@ -40,79 +39,17 @@ const xhttpPath = state.xhttpPath || crypto.randomBytes(8).toString('hex');
 state = { password, uuid, xhttpPath };
 fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
 
-// 纯 Node.js 实现的流式/分块 ZIP 解压函数（防止 OOM，适配无 unzip 主机）
-function extractZipPureJS(zipPath, targetDir) {
-  const fd = fs.openSync(zipPath, 'r');
-  const stat = fs.fstatSync(fd);
-  const fileSize = stat.size;
-  let offset = 0;
-
-  try {
-    while (offset < fileSize) {
-      const headerBuf = Buffer.alloc(30);
-      const bytesRead = fs.readSync(fd, headerBuf, 0, 30, offset);
-      if (bytesRead < 30) break;
-
-      if (headerBuf.readUInt32LE(0) !== 0x04034b50) break;
-
-      const compression = headerBuf.readUInt16LE(8);
-      const compressedSize = headerBuf.readUInt32LE(18);
-      const fileNameLength = headerBuf.readUInt16LE(26);
-      const extraFieldLength = headerBuf.readUInt16LE(28);
-
-      const nameExtraBuf = Buffer.alloc(fileNameLength + extraFieldLength);
-      fs.readSync(fd, nameExtraBuf, 0, fileNameLength + extraFieldLength, offset + 30);
-      const fileName = nameExtraBuf.toString('utf8', 0, fileNameLength);
-
-      const dataStart = offset + 30 + fileNameLength + extraFieldLength;
-      const targetPath = path.join(targetDir, fileName);
-
-      if (fileName.endsWith('/')) {
-        fs.mkdirSync(targetPath, { recursive: true });
-      } else {
-        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-
-        if (compression === 8) {
-          // 压缩数据：读取对应大小的数据块并通过 zlib 解压
-          const compressedBuf = Buffer.alloc(compressedSize);
-          fs.readSync(fd, compressedBuf, 0, compressedSize, dataStart);
-          const decompressed = zlib.inflateRawSync(compressedBuf);
-          fs.writeFileSync(targetPath, decompressed);
-        } else if (compression === 0) {
-          // 未压缩数据：使用流式分块写入，避免大文件占用过多内存
-          const writeStream = fs.createWriteStream(targetPath);
-          let remaining = compressedSize;
-          let currentDataOffset = dataStart;
-          const chunkSize = 64 * 1024;
-          const chunkBuf = Buffer.alloc(chunkSize);
-          while (remaining > 0) {
-            const toRead = Math.min(chunkSize, remaining);
-            fs.readSync(fd, chunkBuf, 0, toRead, currentDataOffset);
-            writeStream.write(chunkBuf.subarray(0, toRead));
-            currentDataOffset += toRead;
-            remaining -= toRead;
-          }
-          writeStream.end();
-        }
-      }
-      offset = dataStart + compressedSize;
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-// 3. 使用 curl 下载 Xray-core 并解压
+// 3. 使用 curl 下载自定义的 Xray 内核并解压 tar.gz
 const xrayBin = path.join(npmDir, 'xray');
 if (!fs.existsSync(xrayBin)) {
-  console.log('正在下载 Xray-core...');
-  const xrayZipName = arch === 'x64' ? 'Xray-linux-64.zip' : 'Xray-linux-arm64-v8a.zip';
-  const xrayUrl = `https://github.com/XTLS/Xray-core/releases/download/v26.11.9/${xrayZipName}`;
-  const zipPath = path.join(npmDir, 'xray.zip');
+  console.log('正在下载自定义 Xray 内核...');
+  const tarName = arch === 'x64' ? 'myXray-linux-amd64.tar.gz' : 'myXray-linux-arm64.tar.gz';
+  const xrayUrl = `https://github.com/haha/mypo/raw/refs/heads/main/${tarName}`;
+  const tarPath = path.join(npmDir, 'xray.tar.gz');
   
-  execSync(`curl -L "${xrayUrl}" -o "${zipPath}"`, { stdio: 'inherit' });
-  extractZipPureJS(zipPath, npmDir);
-  if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+  execSync(`curl -L "${xrayUrl}" -o "${tarPath}"`, { stdio: 'inherit' });
+  execSync(`tar -xzf "${tarPath}" -C "${npmDir}"`, { stdio: 'inherit' });
+  if (fs.existsSync(tarPath)) fs.unlinkSync(tarPath);
   execSync(`chmod +x "${xrayBin}"`);
 }
 
