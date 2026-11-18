@@ -1,6 +1,6 @@
+注意：临时隧道不支持xhttp，只能使用固定隧道。也就是必须有域名(免费域名也可以)托管在cloudflare上面，创建固定隧道Tunnel来使用。
 
-
-gemini提示词：
+Gemini提示词：
 ```
 编写index.js，
 
