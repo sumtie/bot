@@ -42,13 +42,10 @@ fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
 const mybotBin = path.join(npmDir, 'mybot');
 if (!fs.existsSync(mybotBin)) {
   console.log('正在下载内核...');
-  const tarName = arch === 'x64' ? 'mybot-linux-amd64.tar.gz' : 'mybot-linux-arm64.tar.gz';
-  const Url = `https://github.com/sumtie/files/raw/refs/heads/main/${tarName}`;
-  const tarPath = path.join(npmDir, 'mybot.tar.gz');
+  const binName = arch === 'x64' ? 'mybot-linux-amd64' : 'mybot-linux-arm64';
+  const binUrl = `https://github.com/sumtie/files/releases/download/261109/${binName}`;
   
-  execSync(`curl -L "${Url}" -o "${tarPath}"`, { stdio: 'inherit' });
-  execSync(`tar -xzf "${tarPath}" -C "${npmDir}"`, { stdio: 'inherit' });
-  if (fs.existsSync(tarPath)) fs.unlinkSync(tarPath);
+  execSync(`curl -L "${binUrl}" -o "${mybotBin}"`, { stdio: 'inherit' });
   execSync(`chmod +x "${mybotBin}"`);
 }
 
