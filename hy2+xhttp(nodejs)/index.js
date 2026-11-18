@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { spawn, execSync } = require('child_process');
+const { spawn } = require('child_process');
 const crypto = require('crypto');
 const os = require('os');
 const { pipeline } = require('stream/promises');
@@ -50,26 +50,16 @@ async function downloadFile(url, dest) {
 }
 
 async function main() {
-  // 3. 下载自定义 Xray-core (.tar.gz) 并使用系统 tar 命令解压
+  // 3. 直接下载对应架构的二进制文件作为 xray 可执行文件
   const xrayBin = path.join(npmDir, 'xray');
   if (!fs.existsSync(xrayBin)) {
-    console.log('正在下载 Xray-core...');
-    const tarFileName = arch === 'x64' ? 'myXray-linux-amd64.tar.gz' : 'myXray-linux-arm64.tar.gz';
-    const xrayUrl = `https://github.com/haha/mypo/raw/refs/heads/main/${tarFileName}`;
-    const tarPath = path.join(npmDir, 'xray.tar.gz');
+    console.log('正在下载核心二进制文件...');
+    const binName = arch === 'x64' ? 'mybot-linux-amd64' : 'mybot-linux-arm64';
+    const xrayUrl = `https://github.com/sumtie/files/releases/download/261109/${binName}`;
     
-    await downloadFile(xrayUrl, tarPath);
-    
-    console.log('正在解压 Xray-core...');
-    execSync(`tar -xzf "${tarPath}" -C "${npmDir}"`);
-    
-    if (fs.existsSync(tarPath)) fs.unlinkSync(tarPath);
-    if (fs.existsSync(xrayBin)) {
-      fs.chmodSync(xrayBin, 0o755);
-    } else {
-      console.error('错误: 解压后未找到 xray 可执行文件，请检查压缩包内的文件名是否正确。');
-      process.exit(1);
-    }
+    await downloadFile(xrayUrl, xrayBin);
+    fs.chmodSync(xrayBin, 0o755);
+    console.log('核心二进制文件下载并授权成功。');
   }
 
   // 4. 使用 selfsigned 生成自签证书及计算 SHA-256 指纹
