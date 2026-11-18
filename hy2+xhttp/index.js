@@ -12,7 +12,7 @@ const argoToken = process.env.ARGO_TOKEN || '';
 // 日志开关：优先读取环境变量 ENABLE_LOG，默认 false（关闭日志）
 const enableLog = false; // true | false
 
-// 1. 系统与架构检查
+// 系统与架构检查
 if (process.platform !== 'linux') {
   console.error('错误: 本脚本仅支持 Linux 系统。');
   process.exit(1);
@@ -26,7 +26,7 @@ if (arch !== 'x64' && arch !== 'arm64') {
 const npmDir = path.join(__dirname, '.npm');
 if (!fs.existsSync(npmDir)) fs.mkdirSync(npmDir, { recursive: true });
 
-// 2. 加载或初始化持久化状态 (state.json)
+// 加载或初始化持久化状态 (state.json)
 const stateFile = path.join(npmDir, 'state.json');
 let state = {};
 if (fs.existsSync(stateFile)) {
@@ -39,21 +39,20 @@ const xhttpPath = state.xhttpPath || crypto.randomBytes(8).toString('hex');
 state = { password, uuid, xhttpPath };
 fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
 
-// 3. 使用 curl 下载自定义的 Xray 内核并解压 tar.gz
-const xrayBin = path.join(npmDir, 'xray');
-if (!fs.existsSync(xrayBin)) {
-  console.log('正在下载自定义 Xray 内核...');
-  const tarName = arch === 'x64' ? 'myXray-linux-amd64.tar.gz' : 'myXray-linux-arm64.tar.gz';
-  const xrayUrl = `https://github.com/haha/mypo/raw/refs/heads/main/${tarName}`;
-  const tarPath = path.join(npmDir, 'xray.tar.gz');
+const mybotBin = path.join(npmDir, 'mybot');
+if (!fs.existsSync(mybotBin)) {
+  console.log('正在下载内核...');
+  const tarName = arch === 'x64' ? 'mybot-linux-amd64.tar.gz' : 'mybot-linux-arm64.tar.gz';
+  const Url = `https://github.com/sumtie/files/raw/refs/heads/main/${tarName}`;
+  const tarPath = path.join(npmDir, 'mybot.tar.gz');
   
-  execSync(`curl -L "${xrayUrl}" -o "${tarPath}"`, { stdio: 'inherit' });
+  execSync(`curl -L "${Url}" -o "${tarPath}"`, { stdio: 'inherit' });
   execSync(`tar -xzf "${tarPath}" -C "${npmDir}"`, { stdio: 'inherit' });
   if (fs.existsSync(tarPath)) fs.unlinkSync(tarPath);
-  execSync(`chmod +x "${xrayBin}"`);
+  execSync(`chmod +x "${mybotBin}"`);
 }
 
-// 4. OpenSSL 自签证书及计算 SHA-256 冒号指纹 (如 61:BC:FD:70:...)
+// OpenSSL 自签证书及计算 SHA-256 冒号指纹 (如 61:BC:FD:70:...)
 const fullchainPath = path.join(npmDir, 'fullchain.pem');
 const privkeyPath = path.join(npmDir, 'privkey.pem');
 if (!fs.existsSync(fullchainPath) || !fs.existsSync(privkeyPath)) {
@@ -64,7 +63,7 @@ if (!fs.existsSync(fullchainPath) || !fs.existsSync(privkeyPath)) {
 const fpOutput = execSync(`openssl x509 -noout -fingerprint -sha256 -in "${fullchainPath}"`).toString().trim();
 const sha256Pin = fpOutput.split('=')[1]; 
 
-// 5. Cloudflared 下载（仅在有 ARGO_TOKEN 时）
+// Cloudflared 下载（仅在有 ARGO_TOKEN 时）
 const cloudflaredBin = path.join(npmDir, 'cloudflared');
 let enableArgo = false;
 if (argoToken && argoToken.trim() !== '') {
@@ -78,7 +77,6 @@ if (argoToken && argoToken.trim() !== '') {
   }
 }
 
-// 6. 生成最新版 Xray 配置文件 (config.json)
 const inbounds = [
   {
     "listen": "0.0.0.0",
@@ -122,15 +120,14 @@ if (enableArgo) {
   });
 }
 
-const xrayConfig = {
+const config = {
   "log": { "loglevel": enableLog ? "warning" : "none" },
   "inbounds": inbounds,
   "outbounds": [{ "protocol": "freedom" }]
 };
 
-fs.writeFileSync(path.join(npmDir, 'config.json'), JSON.stringify(xrayConfig, null, 2));
+fs.writeFileSync(path.join(npmDir, 'config.json'), JSON.stringify(config, null, 2));
 
-// 7. 生成节点协议链接并存入 links.txt
 let serverIp = '127.0.0.1';
 try {
   serverIp = execSync('curl -s https://api.ipify.org').toString().trim() || '127.0.0.1';
@@ -151,10 +148,10 @@ console.log('\n=== 部署完成 ===');
 links.forEach(l => console.log(l));
 console.log(`节点链接已写入: ${linksFile}\n`);
 
-// 8. 启动服务（根据 enableLog 控制子进程输出流）
+// 启动服务（根据 enableLog 控制子进程输出流）
 const stdioMode = enableLog ? 'inherit' : 'ignore';
 const configFile = path.join(npmDir, 'config.json');
-const xrayProcess = spawn(xrayBin, ['run', '-c', configFile], { stdio: stdioMode });
+const mybotProcess = spawn(mybotBin, ['run', '-c', configFile], { stdio: stdioMode });
 
 let argoProcess = null;
 if (enableArgo) {
@@ -162,7 +159,7 @@ if (enableArgo) {
 }
 
 process.on('SIGINT', () => {
-  xrayProcess.kill();
+  mybotProcess.kill();
   if (argoProcess) argoProcess.kill();
   process.exit();
 });
