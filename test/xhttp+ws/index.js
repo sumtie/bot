@@ -17,6 +17,7 @@ const SHOES_BIN = path.join(DIR, 'shoes');
 const CF_BIN = path.join(DIR, 'cloudflared');
 
 const SHOW_LOG = /^true$/i.test(process.env.SHOW_LOG || '');
+// const SHOW_LOG = true;
 const PORT = parseInt(process.env.ARGO_PORT || '8080', 10);
 const TOKEN = (process.env.ARGO_TOKEN || '').trim();
 const DOMAIN = (process.env.ARGO_DOMAIN || '').trim();
@@ -104,9 +105,21 @@ async function loadState() {
   return s;
 }
 
-const config = (s) => `- address: 127.0.0.1:${PORT}
+const config = (s) => TOKEN
+  ? `- address: 127.0.0.1:${PORT}
   protocol:
-    type: ${TOKEN ? 'xhttp' : 'ws'}
+    type: xhttp
+    path: ${s.path}
+    host: ${DOMAIN || 'your-domain.com'}
+    mode: auto
+    protocol:
+      type: vless
+      user_id: ${s.uuid}
+      udp_enabled: true
+`
+  : `- address: 127.0.0.1:${PORT}
+  protocol:
+    type: ws
     targets:
       - matching_path: ${s.path}
         protocol:
