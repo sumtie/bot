@@ -1,5 +1,7 @@
 注意：临时隧道不支持xhttp，只能使用固定隧道。也就是必须有域名(免费域名也可以)托管在cloudflare上面，创建固定隧道Tunnel来使用。
 
+部分平台开隧道会炸内存，即OOM，能否开隧道，需要测试开了隧道后，下载 Ubuntu iso，然后观察运行内存和cpu情况。
+
 Gemini提示词
 ```
 编写index.js、package.json，
