@@ -2,7 +2,7 @@
 
 部分平台开隧道会炸内存，即OOM，能否开隧道，需要测试开了隧道后，下载 Ubuntu iso，然后观察运行内存和cpu情况。
 
-Gemini提示词：
+提示词：
 ```
 给xray、cloudflared加GOMEMLIMIT和gc，总的ram限制在128MB以内。编写index.js，
 
