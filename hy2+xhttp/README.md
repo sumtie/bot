@@ -4,7 +4,7 @@
 
 Gemini提示词：
 ```
-给mybot、cloudflared加GOMEMLIMIT和gc，总的ram限制在128MB以内。编写index.js，
+给xray、cloudflared加GOMEMLIMIT和gc，总的ram限制在128MB以内。编写index.js，
 
 fetch 下载 https://github.com/sumtie/files/releases/download/261109/xray-linux-amd64 | https://github.com/sumtie/files/releases/download/261109/xray-linux-arm64，防止OOM
 
