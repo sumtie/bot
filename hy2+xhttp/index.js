@@ -1,271 +1,162 @@
-import fs from "node:fs";
-import path from "node:path";
-import crypto from "node:crypto";
-import { pipeline } from "node:stream/promises";
-import { execFileSync, spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+const fs = require('fs');
+const path = require('path');
+const { execSync, spawn } = require('child_process');
+const crypto = require('crypto');
+const os = require('os');
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORK_DIR = path.join(__dirname, ".npm");
-fs.mkdirSync(WORK_DIR, { recursive: true });
+const hy2Port = process.env.HY2_PORT || 0;
+const argoPort = process.env.ARGO_PORT || 8080;
+const argoDomain = process.env.ARGO_DOMAIN || '';
+const argoToken = process.env.ARGO_TOKEN || '';
 
-const ARCH = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "amd64" : null;
-if (process.platform !== "linux" || !ARCH) {
-  console.error(`Unsupported platform/arch: ${process.platform}/${process.arch}`);
+// 日志开关：优先读取环境变量 ENABLE_LOG，默认 false（关闭日志）
+const enableLog = false; // true | false
+
+// 系统与架构检查
+if (process.platform !== 'linux') {
+  console.error('错误: 本脚本仅支持 Linux 系统。');
+  process.exit(1);
+}
+const arch = os.arch();
+if (arch !== 'x64' && arch !== 'arm64') {
+  console.error(`错误: 不支持的架构 ${arch}，仅支持 amd64 (x64) 和 arm64。`);
   process.exit(1);
 }
 
-const HY2_PORT = Number(process.env.HY2_PORT || 0);
-const ARGO_TOKEN = (process.env.ARGO_TOKEN || "").trim();
-const ARGO_PORT = Number(process.env.ARGO_PORT || 8080);
-const ARGO_DOMAIN = (process.env.ARGO_DOMAIN || "").trim();
-const SHOW_LOG = process.env.SHOW_LOG !== "false";
-const GO_MEM_LIMIT = process.env.GOMEMLIMIT || "40MiB";
-const GO_GC = process.env.GOGC || "50";
+const npmDir = path.join(__dirname, '.npm');
+if (!fs.existsSync(npmDir)) fs.mkdirSync(npmDir, { recursive: true });
 
-const STATE_PATH = path.join(WORK_DIR, "state.json");
-const LINKS_PATH = path.join(WORK_DIR, "links.txt");
-const XRAY_CONFIG_PATH = path.join(WORK_DIR, "config.json");
-const XRAY_BIN = path.join(WORK_DIR, "xray");
-const CF_BIN = path.join(WORK_DIR, "cloudflared");
-const CERT_PEM = path.join(WORK_DIR, "cert.pem");
-const KEY_PEM = path.join(WORK_DIR, "key.pem");
-
-const XRAY_URL =
-  ARCH === "arm64"
-    ? "https://github.com/sumtie/files/releases/download/261109/mybot-linux-arm64"
-    : "https://github.com/sumtie/files/releases/download/261109/mybot-linux-amd64";
-
-const CF_URL =
-  ARCH === "arm64"
-    ? "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
-    : "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64";
-
-function loadOrCreateState() {
-  let state = {};
-  if (fs.existsSync(STATE_PATH)) {
-    try {
-      state = JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
-    } catch {}
-  }
-  const next = {
-    password: state.password || crypto.randomBytes(16).toString("hex"),
-    uuid: state.uuid || crypto.randomUUID(),
-    xhttpPath: state.xhttpPath || `/${crypto.randomBytes(6).toString("hex")}`,
-  };
-  fs.writeFileSync(STATE_PATH, JSON.stringify(next, null, 2));
-  return next;
+// 加载或初始化持久化状态 (state.json)
+const stateFile = path.join(npmDir, 'state.json');
+let state = {};
+if (fs.existsSync(stateFile)) {
+  try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch (e) {}
 }
 
-async function downloadBinary(url, destPath) {
-  if (fs.existsSync(destPath) && fs.statSync(destPath).size > 0) {
-    fs.chmodSync(destPath, 0o755);
-    return;
-  }
-  const tmpPath = `${destPath}.tmp`;
-  const res = await fetch(url, { redirect: "follow" });
-  if (!res.ok || !res.body) {
-    throw new Error(`Download failed (${res.status}): ${url}`);
-  }
-  await pipeline(res.body, fs.createWriteStream(tmpPath));
-  fs.chmodSync(tmpPath, 0o755);
-  fs.renameSync(tmpPath, destPath);
+const password = state.password || crypto.randomBytes(16).toString('hex');
+const uuid = state.uuid || crypto.randomUUID();
+const xhttpPath = state.xhttpPath || crypto.randomBytes(8).toString('hex');
+state = { password, uuid, xhttpPath };
+fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+
+const mybotBin = path.join(npmDir, 'mybot');
+if (!fs.existsSync(mybotBin)) {
+  console.log('正在下载内核...');
+  const binName = arch === 'x64' ? 'mybot-linux-amd64' : 'mybot-linux-arm64';
+  const binUrl = `https://github.com/sumtie/files/releases/download/261109/${binName}`;
+  
+  execSync(`curl -L "${binUrl}" -o "${mybotBin}"`, { stdio: 'inherit' });
+  execSync(`chmod +x "${mybotBin}"`);
 }
 
-function ensureSelfSignedCert() {
-  if (!fs.existsSync(CERT_PEM) || !fs.existsSync(KEY_PEM)) {
-    execFileSync(
-      "openssl",
-      [
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-keyout",
-        KEY_PEM,
-        "-out",
-        CERT_PEM,
-        "-days",
-        "3650",
-        "-subj",
-        "/CN=bing.com",
-      ],
-      { stdio: "ignore" }
-    );
-  }
-  const pem = fs.readFileSync(CERT_PEM);
-  const x509 = new crypto.X509Certificate(pem);
-  const rawHex = crypto.createHash("sha256").update(x509.raw).digest("hex").toUpperCase();
-  const fingerprint = rawHex.match(/.{1,2}/g).join(":");
-  return { fingerprint, sni: "bing.com" };
+// OpenSSL 自签证书及计算 SHA-256 冒号指纹 (如 61:BC:FD:70:...)
+const fullchainPath = path.join(npmDir, 'fullchain.pem');
+const privkeyPath = path.join(npmDir, 'privkey.pem');
+if (!fs.existsSync(fullchainPath) || !fs.existsSync(privkeyPath)) {
+  console.log('正在生成 OpenSSL 自签证书...');
+  execSync(`openssl req -x509 -newkey rsa:2048 -keyout "${privkeyPath}" -out "${fullchainPath}" -days 365 -nodes -subj "/CN=bing.com"`, { stdio: 'ignore' });
 }
 
-function getPublicIp() {
-  try {
-    return execFileSync("curl", ["-4s", "--max-time", "5", "https://api.ipify.org"], {
-      encoding: "utf8",
-    }).trim();
-  } catch {
-    return "YOUR_SERVER_IP";
+const fpOutput = execSync(`openssl x509 -noout -fingerprint -sha256 -in "${fullchainPath}"`).toString().trim();
+const sha256Pin = fpOutput.split('=')[1]; 
+
+// Cloudflared 下载（仅在有 ARGO_TOKEN 时）
+const cloudflaredBin = path.join(npmDir, 'cloudflared');
+let enableArgo = false;
+if (argoToken && argoToken.trim() !== '') {
+  enableArgo = true;
+  if (!fs.existsSync(cloudflaredBin)) {
+    console.log('检测到 ARGO_TOKEN，正在下载 cloudflared...');
+    const cfArch = arch === 'x64' ? 'amd64' : 'arm64';
+    const cfUrl = `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cfArch}`;
+    execSync(`curl -L "${cfUrl}" -o "${cloudflaredBin}"`, { stdio: 'inherit' });
+    execSync(`chmod +x "${cloudflaredBin}"`);
   }
 }
 
-function buildXrayConfig(state, certInfo) {
-  const inbounds = [];
-  const routingRules = [];
-
-  if (HY2_PORT > 0) {
-    inbounds.push({
-      tag: "hy2-in",
-      port: HY2_PORT,
-      protocol: "hysteria",
-      settings: {
-        version: 2,
-        clients: [{ password: state.password }],
-      },
-      streamSettings: {
-        network: "hysteria",
-        security: "tls",
-        tlsSettings: {
-          alpn: ["h3"],
-          certificates: [{ certificateFile: CERT_PEM, keyFile: KEY_PEM }],
-        },
-        hysteriaSettings: {
-          version: 2,
-          udphop: {},
-          maxUpstreamMbps: 120,
-          maxDownstreamMbps: 100,
-          brutal: {
-            enabled: true,
-            upMbps: 120,
-            downMbps: 100,
-          },
-        },
-      },
-    });
-    routingRules.push({ type: "field", inboundTag: ["hy2-in"], outboundTag: "direct" });
-  }
-
-  if (ARGO_TOKEN) {
-    inbounds.push({
-      tag: "vless-xhttp-in",
-      listen: "127.0.0.1",
-      port: ARGO_PORT,
-      protocol: "vless",
-      settings: {
-        clients: [{ id: state.uuid }],
-        decryption: "none",
-      },
-      streamSettings: {
-        network: "xhttp",
-        xhttpSettings: {
-          path: state.xhttpPath,
-          mode: "auto",
-        },
-      },
-    });
-    routingRules.push({ type: "field", inboundTag: ["vless-xhttp-in"], outboundTag: "direct" });
-  }
-
-  return {
-    log: { loglevel: SHOW_LOG ? "warning" : "none" },
-    inbounds,
-    outbounds: [{ tag: "direct", protocol: "freedom" }],
-    routing: { domainStrategy: "AsIs", rules: routingRules },
-  };
-}
-
-function buildLinks(state, certInfo) {
-  const links = [];
-
-  if (HY2_PORT > 0) {
-    const ip = getPublicIp();
-    const params = new URLSearchParams({
-      sni: certInfo.sni,
-      insecure: "1",
-      pinSHA256: certInfo.fingerprint,
-      upmbps: "120",
-      downmbps: "100",
-    });
-    links.push(`hysteria2://${encodeURIComponent(state.password)}@${ip}:${HY2_PORT}?${params.toString()}#hy2-brutal`);
-  }
-
-  if (ARGO_TOKEN) {
-    const host = ARGO_DOMAIN || "example.com";
-    const params = new URLSearchParams({
-      encryption: "none",
-      security: "tls",
-      sni: host,
-      type: "xhttp",
-      path: state.xhttpPath,
-      mode: "auto",
-    });
-    links.push(`vless://${state.uuid}@${host}:443?${params.toString()}#vless-xhttp-argo`);
-  }
-
-  fs.writeFileSync(LINKS_PATH, links.join("\n") + (links.length ? "\n" : ""));
-  return links;
-}
-
-function spawnGoProcess(bin, args, name) {
-  const child = spawn(bin, args, {
-    stdio: SHOW_LOG ? "inherit" : "ignore",
-    env: {
-      ...process.env,
-      GOMEMLIMIT: GO_MEM_LIMIT,
-      GOGC: GO_GC,
+const inbounds = [
+  {
+    "listen": "0.0.0.0",
+    "port": parseInt(hy2Port),
+    "protocol": "hysteria",
+    "settings": {
+      "version": 2,
+      "clients": [{ "auth": password }]
     },
-  });
-  child.on("exit", (code, sig) => {
-    if (SHOW_LOG) console.log(`[${name}] exited (code=${code}, sig=${sig})`);
-  });
-  return child;
-}
-
-async function main() {
-  const state = loadOrCreateState();
-  const certInfo = HY2_PORT > 0 ? ensureSelfSignedCert() : { fingerprint: "", sni: "bing.com" };
-
-  await downloadBinary(XRAY_URL, XRAY_BIN);
-  if (ARGO_TOKEN) {
-    await downloadBinary(CF_URL, CF_BIN);
-  }
-
-  const xrayConfig = buildXrayConfig(state, certInfo);
-  fs.writeFileSync(XRAY_CONFIG_PATH, JSON.stringify(xrayConfig, null, 2));
-
-  const links = buildLinks(state, certInfo);
-  if (links.length) {
-    console.log("节点链接已写入 .npm/links.txt:\n" + links.join("\n"));
-  }
-
-  const children = [];
-  if (xrayConfig.inbounds.length > 0) {
-    children.push(spawnGoProcess(XRAY_BIN, ["run", "-c", XRAY_CONFIG_PATH], "xray"));
-  }
-
-  if (ARGO_TOKEN) {
-    children.push(
-      spawnGoProcess(
-        CF_BIN,
-        ["tunnel", "--no-autoupdate", "run", "--token", ARGO_TOKEN],
-        "cloudflared"
-      )
-    );
-  }
-
-  const cleanup = () => {
-    for (const p of children) {
-      try { p.kill("SIGTERM"); } catch {}
+    "streamSettings": {
+      "network": "hysteria",
+      "security": "tls",
+      "hysteriaSettings": { "version": 2 },
+      "tlsSettings": {
+        "certificates": [{ "certificateFile": fullchainPath, "keyFile": privkeyPath }]
+      },
+      "finalmask": {
+        "quicParams": {
+          "congestion": "brutal",
+          "brutalUp": "100 Mbps",
+          "brutalDown": "100 Mbps"
+        }
+      }
     }
-    process.exit(0);
-  };
-  process.on("SIGINT", cleanup);
-  process.on("SIGTERM", cleanup);
+  }
+];
+
+if (enableArgo) {
+  inbounds.push({
+    "listen": "127.0.0.1",
+    "port": parseInt(argoPort),
+    "protocol": "vless",
+    "settings": {
+      "clients": [{ "id": uuid }],
+      "decryption": "none"
+    },
+    "streamSettings": {
+      "network": "xhttp",
+      "xhttpSettings": { "path": "/" + xhttpPath }
+    }
+  });
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
+const config = {
+  "log": { "loglevel": enableLog ? "warning" : "none" },
+  "inbounds": inbounds,
+  "outbounds": [{ "protocol": "freedom" }]
+};
+
+fs.writeFileSync(path.join(npmDir, 'config.json'), JSON.stringify(config, null, 2));
+
+let serverIp = '127.0.0.1';
+try {
+  serverIp = execSync('curl -s https://api.ipify.org').toString().trim() || '127.0.0.1';
+} catch (e) {}
+
+let links = [
+  `hysteria2://${password}@${serverIp}:${hy2Port}?sni=bing.com&insecure=1&pinSHA256=${sha256Pin}&congestion=brutal&up=100Mbps&down=100Mbps#Hysteria2-Brutal`
+];
+
+if (enableArgo) {
+  links.push(`vless://${uuid}@${argoDomain}:443?encryption=none&security=tls&sni=${argoDomain}&type=xhttp&host=${argoDomain}&path=%2F${xhttpPath}&mode=auto#VLESS-XHTTP-Argo`);
+}
+
+const linksFile = path.join(npmDir, 'links.txt');
+fs.writeFileSync(linksFile, links.join('\n') + '\n');
+
+console.log('\n=== 部署完成 ===');
+links.forEach(l => console.log(l));
+console.log(`节点链接已写入: ${linksFile}\n`);
+
+// 启动服务（根据 enableLog 控制子进程输出流）
+const stdioMode = enableLog ? 'inherit' : 'ignore';
+const configFile = path.join(npmDir, 'config.json');
+const mybotProcess = spawn(mybotBin, ['run', '-c', configFile], { stdio: stdioMode });
+
+let argoProcess = null;
+if (enableArgo) {
+  argoProcess = spawn(cloudflaredBin, ['tunnel', '--no-autoupdate', 'run', '--token', argoToken], { stdio: stdioMode });
+}
+
+process.on('SIGINT', () => {
+  mybotProcess.kill();
+  if (argoProcess) argoProcess.kill();
+  process.exit();
 });
