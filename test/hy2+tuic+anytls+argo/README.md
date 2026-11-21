@@ -1,8 +1,8 @@
-给sing-box、cloudflared加GOMEMLIMIT和gc，总的ram限制在128MB以内。
+给sing-box、cloudflared加GOMEMLIMIT和gc，总的ram限制在256MB以内。
 
 编写nodejs代码index.js和package.json
 
-fetch 下载https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64-musl.tar.gz，防止OOM
+fetch 流式下载https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64-musl.tar.gz，防止OOM
 
 tar解压 部署在nodejs主机上，只考虑linux系统amd64和arm64。
 
