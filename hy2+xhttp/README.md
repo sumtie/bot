@@ -6,9 +6,9 @@
 ```
 给xray、cloudflared加GOMEMLIMIT和gc，总的ram限制在128MB以内。编写index.js，
 
-fetch 下载 https://github.com/sumtie/files/releases/download/261109/xray-linux-amd64 | https://github.com/sumtie/files/releases/download/261109/xray-linux-arm64，防止OOM
+fetch 流式下载 https://github.com/sumtie/files/releases/download/261109/xray-linux-amd64 | https://github.com/sumtie/files/releases/download/261109/xray-linux-arm64，防止OOM
 
-fetch 下载cloudflared最新版，防止OOM
+fetch 流式下载cloudflared最新版，防止OOM
 
 部署在nodejs主机上，只考虑linux系统amd64和arm64。
 
