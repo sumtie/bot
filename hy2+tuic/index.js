@@ -1,127 +1,148 @@
 #!/usr/bin/env node
-const fs = require('fs');
-const path = require('path');
-const https = require('https');
-const crypto = require('crypto');
-const { execFileSync, spawn } = require('child_process');
+'use strict';
+// sing-box 1.11.4 / hysteria2 + tuic auto-deploy (linux amd64|arm64)
+const fs = require('fs'), path = require('path'), https = require('https'), os = require('os'), crypto = require('crypto');
+const { spawn, execFileSync } = require('child_process');
+const { pipeline } = require('stream/promises');
 
-const V = '1.11.4';
-const SNI = 'www.bing.com';
+const VER = '1.11.4';
+const ARCH = { x64: 'amd64', arm64: 'arm64' }[process.arch];
+if (!ARCH) die('unsupported arch: ' + process.arch);
+const SHOW_LOG = /^(1|true|yes|on)$/i.test(process.env.SHOW_LOG || '');
+
 const DIR = path.join(__dirname, '.npm');
-const BIN = path.join(DIR, 'sing-box');
-const CERT = path.join(DIR, 'cert.pem');
-const KEY = path.join(DIR, 'key.pem');
-const CFG = path.join(DIR, 'config.json');
-const STATE = path.join(DIR, 'state.json');
-const LINKS = path.join(DIR, 'links.txt');
+fs.mkdirSync(DIR, { recursive: true });
+const BIN = path.join(DIR, 'sing-box'), CERT = path.join(DIR, 'cert.pem'), KEY = path.join(DIR, 'key.pem');
+const STATE = path.join(DIR, 'state.json'), CONFIG = path.join(DIR, 'config.json'), LINKS = path.join(DIR, 'links.txt');
+const SNI = 'www.bing.com';
 
-const hy2Port = Number(process.env.HY2_PORT) || 0;
-const tuicPort = Number(process.env.TUIC_PORT) || 0;
-const showLog = /^(1|true|yes|on)$/i.test(process.env.SHOW_LOG || '');
+const HY2_PORT = +(process.env.HY2_PORT || 0), TUIC_PORT = +(process.env.TUIC_PORT || 0);
+if (!HY2_PORT && !TUIC_PORT) die('set HY2_PORT and/or TUIC_PORT');
+if (HY2_PORT && HY2_PORT === TUIC_PORT) die('HY2_PORT and TUIC_PORT must differ');
+for (const p of [HY2_PORT, TUIC_PORT]) if (p && (p < 1 || p > 65535)) die('invalid port ' + p);
+for (const b of ['openssl', 'tar']) { try { execFileSync('which', [b], { stdio: 'ignore' }); } catch { die('missing ' + b); } }
 
-const arch = process.arch === 'x64' ? 'amd64' : process.arch === 'arm64' ? 'arm64' : null;
+function die(m) { console.error(m); process.exit(1); }
+const log = (...a) => console.log(...a);
 
-// 流式下载：响应流直接 pipe 到文件，全程不落内存
-function get(url, dest) {
-  return new Promise((ok, no) => {
-    https.get(url, { headers: { 'user-agent': 'node' } }, r => {
-      if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
-        r.resume();
-        return ok(get(r.headers.location, dest));
+async function download(url, dest, depth = 0) {
+  if (depth > 5) throw new Error('too many redirects');
+  await new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: { 'user-agent': 'node' } }, res => {
+      const { statusCode, headers } = res;
+      if (statusCode >= 300 && statusCode < 400 && headers.location) {
+        res.resume();
+        return download(new URL(headers.location, url), dest, depth + 1).then(resolve, reject);
       }
-      if (r.statusCode !== 200) {
-        r.resume();
-        return no(new Error('HTTP ' + r.statusCode));
-      }
-      const w = fs.createWriteStream(dest);
-      r.pipe(w);
-      w.on('finish', () => w.close(ok));
-      w.on('error', no);
-      r.on('error', no);
-    }).on('error', no);
+      if (statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + statusCode)); }
+      pipeline(res, fs.createWriteStream(dest)).then(resolve, reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(60000, () => req.destroy(new Error('timeout')));
   });
 }
 
-async function ensureBin() {
+async function ensureBinary() {
   if (fs.existsSync(BIN)) return;
-  const name = `sing-box-${V}-linux-${arch}`;
+  const name = `sing-box-${VER}-linux-${ARCH}`;
   const tgz = path.join(DIR, name + '.tar.gz');
-  await get(`https://github.com/SagerNet/sing-box/releases/download/v${V}/${name}.tar.gz`, tgz);
-  execFileSync('tar', ['-xzf', tgz, '-C', DIR]);
+  log('[sb] downloading ' + VER + ' ' + ARCH);
+  await download(`https://github.com/SagerNet/sing-box/releases/download/v${VER}/${name}.tar.gz`, tgz);
+  execFileSync('tar', ['-xzf', tgz, '-C', DIR], { stdio: 'ignore' });
   fs.renameSync(path.join(DIR, name, 'sing-box'), BIN);
-  fs.chmodSync(BIN, 0o755);
   fs.rmSync(path.join(DIR, name), { recursive: true, force: true });
-  fs.rmSync(tgz);
+  fs.rmSync(tgz, { force: true });
+  fs.chmodSync(BIN, 0o755);
 }
 
 function ensureCert() {
   if (fs.existsSync(CERT) && fs.existsSync(KEY)) return;
-  execFileSync('openssl', [
-    'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1',
-    '-keyout', KEY, '-out', CERT, '-days', '3650', '-nodes',
-    '-subj', `/CN=${SNI}`, '-addext', `subjectAltName=DNS:${SNI}`
-  ], { stdio: 'ignore' });
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1',
+    '-nodes', '-days', '3650', '-subj', '/CN=' + SNI, '-keyout', KEY, '-out', CERT], { stdio: 'ignore' });
 }
 
 function fingerprint() {
-  const out = execFileSync('openssl', ['x509', '-in', CERT, '-noout', '-fingerprint', '-sha256']).toString();
-  return out.split('=')[1].trim();
+  const out = execFileSync('openssl', ['x509', '-in', CERT, '-noout', '-fingerprint', '-sha256'], { encoding: 'utf8' });
+  return out.trim().split('=').pop();
 }
 
 function loadState() {
-  if (fs.existsSync(STATE)) return JSON.parse(fs.readFileSync(STATE, 'utf8'));
-  const s = { password: crypto.randomBytes(16).toString('base64url'), uuid: crypto.randomUUID() };
-  fs.writeFileSync(STATE, JSON.stringify(s, null, 2));
-  return s;
+  let s = {};
+  try { s = JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch {}
+  const password = s.password || process.env.PASSWORD || crypto.randomBytes(12).toString('base64url');
+  const uuid = s.uuid || crypto.randomUUID();
+  fs.writeFileSync(STATE, JSON.stringify({ password, uuid }, null, 2));
+  return { password, uuid };
 }
 
-const getIP = () => new Promise((ok, no) => {
-  https.get('https://api.ipify.org', r => {
-    let d = '';
-    r.on('data', c => (d += c));
-    r.on('end', () => ok(d.trim()));
-  }).on('error', no);
-});
+function publicIP() {
+  const fallback = () => {
+    for (const list of Object.values(os.networkInterfaces())) for (const a of list || [])
+      if (a.family === 'IPv4' && !a.internal) return a.address;
+    return '127.0.0.1';
+  };
+  return new Promise(res => {
+    const req = https.get('https://api.ipify.org', { headers: { 'user-agent': 'node' } }, r => {
+      let d = ''; r.on('data', c => d += c); r.on('end', () => res(d.trim() || fallback()));
+    });
+    req.on('error', () => res(fallback()));
+    req.setTimeout(5000, () => { req.destroy(); res(fallback()); });
+  });
+}
 
-async function main() {
-  if (!arch) throw new Error('unsupported arch: ' + process.arch);
-  if (!hy2Port && !tuicPort) throw new Error('set HY2_PORT and/or TUIC_PORT');
-  if (hy2Port && tuicPort && hy2Port === tuicPort) throw new Error('HY2_PORT and TUIC_PORT must differ');
+async function runArgo() {
+  if (!process.env.ARGO_AUTH) return;
+  const bin = path.join(DIR, 'cloudflared');
+  if (!fs.existsSync(bin)) {
+    log('[argo] downloading');
+    await download(`https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}`, bin);
+    fs.chmodSync(bin, 0o755);
+  }
+  spawn(bin, ['tunnel', '--no-autoupdate', '--protocol', 'http2', 'run', '--token', process.env.ARGO_AUTH],
+    { stdio: SHOW_LOG ? 'inherit' : 'ignore', cwd: DIR }).on('exit', c => log('[argo] exited ' + c));
+}
 
-  fs.mkdirSync(DIR, { recursive: true });
-  await ensureBin();
+(async () => {
+  await ensureBinary();
   ensureCert();
-
   const { password, uuid } = loadState();
-  const host = process.env.HOST || (await getIP());
-  const sha = fingerprint();
-  const tls = { enabled: true, server_name: SNI, alpn: ['h3'], certificate_path: CERT, key_path: KEY };
+  const fp = fingerprint();
+  const host = await publicIP();
 
   const inbounds = [];
-  const links = [];
+  if (HY2_PORT) inbounds.push({
+    type: 'hysteria2', tag: 'hy2-in', listen: '::', listen_port: HY2_PORT,
+    users: [{ password }],
+    tls: { enabled: true, server_name: SNI, alpn: ['h3'], certificate_path: CERT, key_path: KEY }
+  });
+  if (TUIC_PORT) inbounds.push({
+    type: 'tuic', tag: 'tuic-in', listen: '::', listen_port: TUIC_PORT,
+    users: [{ uuid, password }], congestion_control: 'bbr',
+    tls: { enabled: true, server_name: SNI, alpn: ['h3'], certificate_path: CERT, key_path: KEY }
+  });
 
-  if (hy2Port) {
-    inbounds.push({ type: 'hysteria2', tag: 'hy2', listen: '::', listen_port: hy2Port, users: [{ password }], tls });
-    links.push(`hysteria2://${encodeURIComponent(password)}@${host}:${hy2Port}/?sni=${SNI}&insecure=1&pinSHA256=${sha}#hy2`);
-  }
-  if (tuicPort) {
-    inbounds.push({ type: 'tuic', tag: 'tuic', listen: '::', listen_port: tuicPort, users: { [uuid]: password }, congestion_control: 'bbr', tls });
-    links.push(`tuic://${uuid}:${encodeURIComponent(password)}@${host}:${tuicPort}?sni=${SNI}&alpn=h3&congestion_control=bbr&udp_relay_mode=native&insecure=1&pinSHA256=${sha}#tuic`);
-  }
-
-  fs.writeFileSync(CFG, JSON.stringify({
-    log: { disabled: !showLog, level: 'info', timestamp: true },
-    inbounds,
-    outbounds: [{ type: 'direct', tag: 'direct' }]
+  fs.writeFileSync(CONFIG, JSON.stringify({
+    log: { level: SHOW_LOG ? 'info' : 'warn', timestamp: true },
+    inbounds, outbounds: [{ type: 'direct', tag: 'direct' }]
   }, null, 2));
+  execFileSync(BIN, ['check', '-c', CONFIG], { stdio: 'ignore' });
+
+  const links = [];
+  const enc = encodeURIComponent(password);
+  if (HY2_PORT) links.push(`hysteria2://${enc}@${host}:${HY2_PORT}/?sni=${SNI}&insecure=1&pinSHA256=${fp}#hy2-${host}`);
+  if (TUIC_PORT) links.push(`tuic://${uuid}:${enc}@${host}:${TUIC_PORT}/?sni=${SNI}&alpn=h3&congestion_control=bbr&allow_insecure=1&pinSHA256=${fp}#tuic-${host}`);
   fs.writeFileSync(LINKS, links.join('\n') + '\n');
-  console.log(links.join('\n'));
 
-  spawn(BIN, ['run', '-c', CFG], { stdio: showLog ? 'inherit' : 'ignore' })
-    .on('exit', c => process.exit(c));
-}
+  log('password: ' + password);
+  log('uuid: ' + uuid);
+  log('sha256: ' + fp);
+  for (const l of links) log(l);
+  log('links -> ' + LINKS);
 
-main().catch(e => {
-  console.error(e.message);
-  process.exit(1);
-});
+  await runArgo();
+
+  const child = spawn(BIN, ['run', '-c', CONFIG], { stdio: SHOW_LOG ? 'inherit' : 'ignore', cwd: DIR });
+  const stop = () => { try { child.kill('SIGTERM'); } catch {} process.exit(0); };
+  process.on('SIGINT', stop); process.on('SIGTERM', stop);
+  child.on('exit', c => { log('[sb] exited ' + c); process.exit(c || 0); });
+})().catch(e => die(e.message));
