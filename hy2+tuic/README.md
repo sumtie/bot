@@ -2,7 +2,7 @@
 ```
 编写nodejs代码index.js，
 
-fetch 流式下载sing-box 1.11.4
+流式下载，防止OOM，sing-box 1.11.4
 
 部署在nodejs主机上，只考虑linux系统amd64和arm64。
 
