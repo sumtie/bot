@@ -1,0 +1,16 @@
+{
+  "name": "sb-runner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "selfsigned": "^5.5.0"
+  }
+}
