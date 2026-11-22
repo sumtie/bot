@@ -159,9 +159,9 @@ function buildHy2Link() {
 function buildArgoLink(domain) {
   const host = domain || argoDomain || 'example.com';
   if (isFixedArgo) {
-    return `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${host}&type=xhttp&host=${host}&path=%2F${xhttpPath}&mode=auto#VLESS-XHTTP-Argo-Fixed`;
+    return `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${host}&type=xhttp&host=${host}&path=%2F${xhttpPath}&mode=auto#XHTTP-Argo`;
   }
-  return `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${host}&type=ws&host=${host}&path=%2F${wsPath}#VLESS-WS-Argo-Temp`;
+  return `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${host}&type=ws&host=${host}&path=%2F${wsPath}#WS-Argo`;
 }
 
 function writeAndPrintLinks(quickTunnelDomain = '') {
