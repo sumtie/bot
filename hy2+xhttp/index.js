@@ -1,234 +1,221 @@
-#!/usr/bin/env node
-'use strict';
-// 依赖: node >= 18 (global fetch), openssl, linux amd64/arm64
 const fs = require('fs');
 const path = require('path');
+const { execSync, spawn } = require('child_process');
 const crypto = require('crypto');
-const { spawn, spawnSync } = require('child_process');
-const { pipeline } = require('stream/promises');
-const { Readable } = require('stream');
+const os = require('os');
 
-const D = path.join(__dirname, '.npm');
-const STATE = path.join(D, 'state.json');
-const CFG = path.join(D, 'config.json');
-const LINKS = path.join(D, 'links.txt');
-const CERT = path.join(D, 'cert.pem');
-const KEY = path.join(D, 'key.pem');
-const XRAY = path.join(D, 'xray');
-const ARGO = path.join(D, 'cloudflared');
+const hy2Port = process.env.HY2_PORT || 8443;
+const argoPort = process.env.ARGO_PORT || 8080;
+const argoDomain = process.env.ARGO_DOMAIN || '';
+const argoToken = process.env.ARGO_TOKEN || '';
+const onArgo = true; // true | false
+const isFixedArgo = onArgo && argoToken !== '';
 
-const SHOW_LOG = String(process.env.SHOW_LOG).toLowerCase() === 'true';
-const HY2_PORT = Number(process.env.HY2_PORT || 0);
-const ARGO_PORT = Number(process.env.ARGO_PORT || 8080);
-const ARGO_TOKEN = process.env.ARGO_TOKEN || '';
-const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
-const UP = 120;   // 服务端上行 mbps
-const DOWN = 100; // 服务端下行 mbps
-const SNI = 'www.bing.com';
+// 日志开关：优先读取环境变量 ENABLE_LOG，默认 false（关闭日志）
+const enableLog = process.env.ENABLE_LOG === 'true'; // true | false
 
-// 内存: 两个 Go 进程合计软上限 ~MB, 留出运行时余量
-const MEM_XRAY = 64, MEM_ARGO = 48, GOGC = '50';
-
-const ARCH = { x64: 'amd64', arm64: 'arm64' }[process.arch];
-if (!ARCH) { console.error(`不支持的架构: ${process.arch}`); process.exit(1); }
-
-const kids = [];
-let stopping = false;
-
-// 流式下载: 不把整个二进制读进内存
-async function dl(url, dest) {
-  if (fs.existsSync(dest) && fs.statSync(dest).size > 0) return;
-  const name = path.basename(dest);
-  const tmp = dest + '.tmp';
-  console.log(`下载 ${name} ...`);
-
-  const r = await fetch(url, { redirect: 'follow' });
-  if (!r.ok || !r.body) throw new Error(`下载失败 ${r.status}: ${url}`);
-
-  const total = Number(r.headers.get('content-length') || 0);
-  let got = 0, last = 0;
-  const body = Readable.fromWeb(r.body);
-  body.on('data', (c) => {
-    got += c.length;
-    const now = Date.now();
-    if (total && now - last > 200) {
-      last = now;
-      process.stdout.write(`\r  ${name} ${(got / 1048576).toFixed(1)}/${(total / 1048576).toFixed(1)} MB`);
-    }
-  });
-
-  try {
-    await pipeline(body, fs.createWriteStream(tmp, { mode: 0o755 }));
-  } catch (e) {
-    try { fs.unlinkSync(tmp); } catch {}
-    throw e;
-  }
-  if (!got) { try { fs.unlinkSync(tmp); } catch {} throw new Error(`${name} 下载为空`); }
-  if (total && got !== total) { try { fs.unlinkSync(tmp); } catch {} throw new Error(`${name} 下载不完整 ${got}/${total}`); }
-  fs.renameSync(tmp, dest);
-  fs.chmodSync(dest, 0o755);
-  if (total) process.stdout.write('\n');
+// 系统与架构检查
+if (process.platform !== 'linux') {
+  console.error('错误: 本脚本仅支持 Linux 系统。');
+  process.exit(1);
+}
+const arch = os.arch();
+if (arch !== 'x64' && arch !== 'arm64') {
+  console.error(`错误: 不支持的架构 ${arch}，仅支持 amd64 (x64) 和 arm64。`);
+  process.exit(1);
 }
 
-async function getIP() {
-  if (process.env.IP) return process.env.IP;
-  for (const u of ['https://api.ipify.org', 'https://ipv4.icanhazip.com', 'https://ip.sb']) {
-    try {
-      const t = (await (await fetch(u)).text()).trim();
-      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(t)) return t;
-    } catch {}
-  }
-  return '';
+const npmDir = path.join(__dirname, '.npm');
+if (!fs.existsSync(npmDir)) fs.mkdirSync(npmDir, { recursive: true });
+
+// 加载或初始化持久化状态 (state.json)
+const stateFile = path.join(npmDir, 'state.json');
+let state = {};
+if (fs.existsSync(stateFile)) {
+  try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch (e) {}
 }
 
-function supervise(name, fn) {
-  const start = () => {
-    const p = fn();
-    kids.push(p);
-    p.on('exit', (c) => { if (!stopping) { console.log(`${name} 退出(${c})，3s 后重启`); setTimeout(start, 3000); } });
-    return p;
-  };
-  return start();
+const password = state.password || crypto.randomBytes(16).toString('hex');
+const uuid = state.uuid || crypto.randomUUID();
+const xhttpPath = state.xhttpPath || crypto.randomBytes(8).toString('hex');
+const wsPath = state.wsPath || crypto.randomBytes(8).toString('hex');
+state = { password, uuid, xhttpPath, wsPath };
+fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+
+const mybotBin = path.join(npmDir, 'mybot');
+if (!fs.existsSync(mybotBin)) {
+  console.log('正在下载内核...');
+  const binName = arch === 'x64' ? 'mybot-linux-amd64' : 'mybot-linux-arm64';
+  const binUrl = `https://github.com/sumtie/files/releases/download/261109/${binName}`;
+
+  execSync(`curl -L "${binUrl}" -o "${mybotBin}"`, { stdio: 'inherit' });
+  execSync(`chmod +x "${mybotBin}"`);
 }
 
-(async () => {
-  fs.mkdirSync(D, { recursive: true });
+// OpenSSL 自签证书及计算 SHA-256 冒号指纹 (如 61:BC:FD:70:...)
+const fullchainPath = path.join(npmDir, 'fullchain.pem');
+const privkeyPath = path.join(npmDir, 'privkey.pem');
+if (!fs.existsSync(fullchainPath) || !fs.existsSync(privkeyPath)) {
+  console.log('正在生成 OpenSSL 自签证书...');
+  execSync(`openssl req -x509 -newkey rsa:2048 -keyout "${privkeyPath}" -out "${fullchainPath}" -days 365 -nodes -subj "/CN=bing.com"`, { stdio: 'ignore' });
+}
 
-  let state = {};
-  try { state = JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch {}
-  const rnd = (n) => crypto.randomBytes(n).toString('hex');
-  state.password ||= rnd(16);
-  state.uuid ||= crypto.randomUUID();
-  state.xhttpPath ||= '/' + rnd(8);
-  state.wsPath ||= '/' + rnd(8);
-  fs.writeFileSync(STATE, JSON.stringify(state, null, 2), { mode: 0o600 });
+const fpOutput = execSync(`openssl x509 -noout -fingerprint -sha256 -in "${fullchainPath}"`).toString().trim();
+const sha256Pin = fpOutput.split('=')[1];
 
-  await Promise.all([
-    dl(`https://github.com/sumtie/files/releases/download/261109/mybot-linux-${ARCH}`, XRAY),
-    dl(`https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}`, ARGO),
-  ]);
-
-  let pin = '';
-  if (HY2_PORT) {
-    if (!fs.existsSync(CERT) || !fs.existsSync(KEY)) {
-      const r = spawnSync('openssl', ['req', '-x509', '-newkey', 'ec',
-        '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-keyout', KEY, '-out', CERT,
-        '-days', '3650', '-nodes', '-subj', `/CN=${SNI}`,
-        '-addext', `subjectAltName=DNS:${SNI}`], { stdio: 'ignore' });
-      if (r.status !== 0) { console.error('证书生成失败'); process.exit(1); }
-      fs.chmodSync(KEY, 0o600);
-    }
-    const out = spawnSync('openssl', ['x509', '-in', CERT, '-noout', '-fingerprint', '-sha256'], { encoding: 'utf8' }).stdout || '';
-    pin = (out.match(/=([0-9A-F:]{95})/i) || [])[1] || '';
-    if (!pin) console.warn('警告: 未能计算证书指纹');
+// Cloudflared 下载（仅在 ON_ARGO 为 true 时下载）
+const cloudflaredBin = path.join(npmDir, 'cloudflared');
+if (onArgo) {
+  if (!fs.existsSync(cloudflaredBin)) {
+    console.log(isFixedArgo ? 'ON_ARGO 已开启（固定隧道），正在下载 cloudflared...' : 'ON_ARGO 已开启（临时隧道），正在下载 cloudflared...');
+    const cfArch = arch === 'x64' ? 'amd64' : 'arm64';
+    const cfUrl = `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cfArch}`;
+    execSync(`curl -L "${cfUrl}" -o "${cloudflaredBin}"`, { stdio: 'inherit' });
+    execSync(`chmod +x "${cloudflaredBin}"`);
   }
+} else {
+  console.log('ON_ARGO 为 false，跳过下载并禁用 Argo 隧道。');
+}
 
-  const inbounds = [{
-    tag: 'argo',
-    listen: '127.0.0.1',
-    port: ARGO_PORT,
-    protocol: 'vless',
-    settings: { clients: [{ id: state.uuid }], decryption: 'none' },
-    streamSettings: ARGO_TOKEN
-      ? { network: 'xhttp', security: 'none', xhttpSettings: { path: state.xhttpPath, mode: 'auto' } }
-      : { network: 'ws', security: 'none', wsSettings: { path: state.wsPath } },
-  }];
-
-  if (HY2_PORT) {
-    inbounds.push({
-      tag: 'hy2',
-      listen: '0.0.0.0',
-      port: HY2_PORT,
-      protocol: 'hysteria',
-      settings: { version: 2, users: [{ auth: state.password, email: 'hy2' }] },
-      streamSettings: {
-        network: 'hysteria',
-        security: 'tls',
-        tlsSettings: { serverName: SNI, alpn: ['h3'], certificates: [{ usage: 'encipherment', certificateFile: CERT, keyFile: KEY }] },
-        hysteriaSettings: { version: 2, auth: state.password },
-        finalmask: { quicParams: { congestion: 'brutal', brutalUp: `${UP} mbps`, brutalDown: `${DOWN} mbps` } },
+const inbounds = [
+  {
+    "listen": "0.0.0.0",
+    "port": parseInt(hy2Port),
+    "protocol": "hysteria",
+    "settings": {
+      "version": 2,
+      "clients": [{ "auth": password }]
+    },
+    "streamSettings": {
+      "network": "hysteria",
+      "security": "tls",
+      "hysteriaSettings": { "version": 2 },
+      "tlsSettings": {
+        "certificates": [{ "certificateFile": fullchainPath, "keyFile": privkeyPath }]
       },
+      "finalmask": {
+        "quicParams": {
+          "congestion": "brutal",
+          "brutalUp": "160 Mbps",
+          "brutalDown": "150 Mbps"
+        }
+      }
+    }
+  }
+];
+
+if (onArgo) {
+  if (isFixedArgo) {
+    // 固定隧道：vless + xhttp
+    inbounds.push({
+      "listen": "127.0.0.1",
+      "port": parseInt(argoPort),
+      "protocol": "vless",
+      "settings": {
+        "clients": [{ "id": uuid }],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "xhttpSettings": { "path": "/" + xhttpPath }
+      }
+    });
+  } else {
+    // 临时隧道：vless + ws
+    inbounds.push({
+      "listen": "127.0.0.1",
+      "port": parseInt(argoPort),
+      "protocol": "vless",
+      "settings": {
+        "clients": [{ "id": uuid }],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "/" + wsPath }
+      }
     });
   }
+}
 
-  fs.writeFileSync(CFG, JSON.stringify({
-    log: { loglevel: 'warning' },
-    inbounds,
-    outbounds: [{ tag: 'direct', protocol: 'freedom' }],
-  }, null, 2), { mode: 0o600 });
+const config = {
+  "log": { "loglevel": enableLog ? "warning" : "none" },
+  "inbounds": inbounds,
+  "outbounds": [{ "protocol": "freedom" }]
+};
 
-  const test = spawnSync(XRAY, ['run', '-test', '-c', CFG], { encoding: 'utf8', cwd: D });
-  if (test.status !== 0) { console.error('配置校验失败:\n' + (test.stderr || test.stdout)); process.exit(1); }
+const configFile = path.join(npmDir, 'config.json');
+fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
 
-  supervise('xray', () => {
-    const p = spawn(XRAY, ['run', '-c', CFG], {
-      cwd: D, stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, GOMEMLIMIT: `${MEM_XRAY}MiB`, GOGC, GODEBUG: 'madvdontneed=1' },
+let serverIp = '127.0.0.1';
+try {
+  serverIp = execSync('curl -s https://api.ipify.org').toString().trim() || '127.0.0.1';
+} catch (e) {}
+
+function buildHy2Link() {
+  return `hysteria2://${password}@${serverIp}:${hy2Port}?sni=bing.com&insecure=1&pinSHA256=${sha256Pin}&congestion=brutal&up=100Mbps&down=100Mbps#Hysteria2-Brutal`;
+}
+
+function buildArgoLink(domain) {
+  const host = domain || argoDomain || 'example.com';
+  if (isFixedArgo) {
+    return `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${host}&type=xhttp&host=${host}&path=%2F${xhttpPath}&mode=auto#VLESS-XHTTP-Argo-Fixed`;
+  }
+  return `vless://${uuid}@${host}:443?encryption=none&security=tls&sni=${host}&type=ws&host=${host}&path=%2F${wsPath}#VLESS-WS-Argo-Temp`;
+}
+
+function writeAndPrintLinks(quickTunnelDomain = '') {
+  const links = [buildHy2Link()];
+  if (onArgo) {
+    if (isFixedArgo || quickTunnelDomain) {
+      links.push(buildArgoLink(isFixedArgo ? argoDomain : quickTunnelDomain));
+    }
+  }
+
+  const linksFile = path.join(npmDir, 'links.txt');
+  fs.writeFileSync(linksFile, links.join('\n') + '\n');
+
+  console.log('\n=== 部署完成 ===');
+  links.forEach(l => console.log(l));
+  console.log(`节点链接已写入: ${linksFile}\n`);
+}
+
+// 启动主内核进程
+const stdioMode = enableLog ? 'inherit' : 'ignore';
+const mybotProcess = spawn(mybotBin, ['run', '-c', configFile], { stdio: stdioMode });
+
+let argoProcess = null;
+if (onArgo) {
+  if (isFixedArgo) {
+    argoProcess = spawn(cloudflaredBin, ['tunnel', '--no-autoupdate', 'run', '--token', argoToken], { stdio: stdioMode });
+    writeAndPrintLinks();
+  } else {
+    argoProcess = spawn(cloudflaredBin, ['tunnel', '--url', `http://127.0.0.1:${argoPort}`, '--no-autoupdate'], {
+      stdio: ['ignore', 'pipe', 'pipe']
     });
-    const out = (d) => { if (SHOW_LOG) process.stdout.write(d); };
-    p.stdout.on('data', out);
-    p.stderr.on('data', out);
-    return p;
-  });
 
-  const argoArgs = ARGO_TOKEN
-    ? ['tunnel', '--no-autoupdate', '--protocol', 'http2', 'run', '--token', ARGO_TOKEN]
-    : ['tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', `http://127.0.0.1:${ARGO_PORT}`];
-
-  supervise('cloudflared', () => {
-    const p = spawn(ARGO, argoArgs, {
-      cwd: D, stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, GOMEMLIMIT: `${MEM_ARGO}MiB`, GOGC, GODEBUG: 'madvdontneed=1' },
-    });
-    const out = (d) => {
-      if (SHOW_LOG) process.stdout.write(d);
-      if (!ARGO_TOKEN && !ARGO_DOMAIN) {
-        const m = String(d).match(/https:\/\/([a-z0-9-]+\.trycloudflare\.com)/i);
-        if (m) emit(m[1]);
+    let quickDomainFound = false;
+    const handleArgoOutput = (chunk) => {
+      const text = chunk.toString();
+      if (enableLog) process.stdout.write(text);
+      if (!quickDomainFound) {
+        const match = text.match(/https:\/\/([a-zA-Z0-9-]+\.trycloudflare\.com)/);
+        if (match && match[1]) {
+          quickDomainFound = true;
+          writeAndPrintLinks(match[1]);
+        }
       }
     };
-    p.stdout.on('data', out);
-    p.stderr.on('data', out);
-    return p;
-  });
 
-  let emitted = false;
-  async function emit(tempHost) {
-    if (emitted) return;
-    const host = ARGO_DOMAIN || tempHost;
-    if (!host) { console.warn('缺少 ARGO_DOMAIN，跳过 argo 链接'); return; }
-    emitted = true;
-
-    const lines = [];
-    const q = (o) => new URLSearchParams(o).toString();
-    const vless = (type, p) => `vless://${state.uuid}@${host}:443?` + q({
-      encryption: 'none', security: 'tls', sni: host, fp: 'chrome',
-      type, host, path: p, ...(type === 'xhttp' ? { mode: 'auto' } : {}),
-    }) + `#${type}`;
-    lines.push(vless(ARGO_TOKEN ? 'xhttp' : 'ws', ARGO_TOKEN ? state.xhttpPath : state.wsPath));
-
-    if (HY2_PORT) {
-      const ip = await getIP();
-      if (ip) {
-        lines.push(`hysteria2://${state.password}@${ip}:${HY2_PORT}/?` + q({
-          sni: SNI, insecure: 1, ...(pin ? { pinSHA256: pin } : {}),
-          alpn: 'h3', upmbps: DOWN, downmbps: UP,
-        }) + `#hy2-${HY2_PORT}`);
-      }
-    }
-
-    const text = lines.join('\n') + '\n';
-    fs.writeFileSync(LINKS, text, { mode: 0o600 });
-    console.log('\n===== 节点链接 =====\n' + text);
+    argoProcess.stdout.on('data', handleArgoOutput);
+    argoProcess.stderr.on('data', handleArgoOutput);
   }
+} else {
+  writeAndPrintLinks();
+}
 
-  if (ARGO_TOKEN) setTimeout(() => emit(''), 3000);
-
-  const stop = () => {
-    stopping = true;
-    kids.forEach((p) => { try { p.kill('SIGKILL'); } catch {} });
-    process.exit(0);
-  };
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
-})().catch((e) => { console.error(e); process.exit(1); });
+process.on('SIGINT', () => {
+  mybotProcess.kill();
+  if (argoProcess) argoProcess.kill();
+  process.exit();
+});
