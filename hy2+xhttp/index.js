@@ -10,7 +10,7 @@ const argoDomain = process.env.ARGO_DOMAIN || '';
 const argoToken = process.env.ARGO_TOKEN || '';
 const onArgo = true; // true | false
 const isFixedArgo = onArgo && Boolean(argoToken);
-const enableLog = process.env.ENABLE_LOG === 'true';
+const enableLog = process.env.ENABLE_LOG === 'true'; // true | false
 
 if (process.platform !== 'linux') {
   console.error('错误: 本脚本仅支持 Linux 系统。');
