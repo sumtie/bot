@@ -6,7 +6,7 @@ Gemini提示词：
 ```
 编写index.js，
 
-fetch 流式下载 https://github.com/sumtie/files/releases/download/261109/xray-linux-amd64 | https://github.com/sumtie/files/releases/download/261109/xray-linux-arm64，防止OOM
+fetch 流式下载，防止OOM，https://github.com/sumtie/files/releases/download/261109/xray-linux-amd64 | https://github.com/sumtie/files/releases/download/261109/xray-linux-arm64
 
 fetch 流式下载cloudflared最新版，防止OOM
 
